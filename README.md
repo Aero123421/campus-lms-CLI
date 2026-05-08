@@ -10,26 +10,65 @@
 - `--json` 連携を前提に、機械可読の出力を第一級で扱います。
 - 認証情報は必要最小限のみ保存し、秘密情報は画面出力しません。
 
-## インストール / ビルド
+## インストール
 
-本リポジトリは Rust 製の CLI を想定しています。
+### npm で入れる
+
+GitHub から直接インストールできます。
 
 ```bash
-# Rust toolchain が必要
-cargo build --release
-
-# ローカルインストール
-cargo install --path .
+npm install -g github:Aero123421/campus-lms-CLI
+campus-lms init
+campus-lms auth status --json
 ```
 
-Node.js / npm 経由でも利用できます。通常の `npm install` では、同梱済みまたは GitHub Releases などに置いた prebuilt binary を使うため、利用者側に Rust toolchain は不要です。
+リポジトリを clone して試す場合は以下です。
 
 ```bash
+git clone https://github.com/Aero123421/campus-lms-CLI.git
+cd campus-lms-CLI
 npm install
 npx campus-lms capabilities
 ```
 
-配布用 prebuilt binary は以下の流れで準備します。
+通常の npm install では、同梱済みまたは GitHub Releases の prebuilt binary を使います。利用者側に Rust toolchain は不要です。
+
+### npm package から入れる
+
+npm registry に publish 済みの場合は以下です。
+
+```bash
+npm install -g campus-lms-cli
+campus-lms init
+```
+
+### アップデート
+
+```bash
+npm install -g github:Aero123421/campus-lms-CLI
+# npm registry から入れている場合:
+npm install -g campus-lms-cli@latest
+```
+
+### アンインストール
+
+```bash
+campus-lms uninstall --yes
+npm uninstall -g campus-lms-cli
+```
+
+GitHub から直接入れた場合も、npm の global package 名は通常 `campus-lms-cli` です。
+
+## 開発者向けビルド
+
+Rust toolchain がある場合はソースからビルドできます。
+
+```bash
+cargo build --release
+cargo test
+```
+
+配布用 prebuilt binary を作る場合:
 
 ```bash
 npm run build:native
@@ -37,27 +76,7 @@ npm run prepare:prebuilt
 npm pack
 ```
 
-prebuilt binary をパッケージに同梱しない場合は、`package.json` の `repository.url` または `campusLms.binaryBaseUrl` に release URL を設定すると、`postinstall` が以下の名前のファイルを取得します。
-
-```text
-campus-lms-v<version>-windows-x64.exe
-campus-lms-v<version>-windows-arm64.exe
-campus-lms-v<version>-macos-x64
-campus-lms-v<version>-macos-arm64
-campus-lms-v<version>-linux-x64
-campus-lms-v<version>-linux-arm64
-```
-
-各 binary と同じ場所に SHA256 sidecar も置きます。`postinstall` は binary をインストールする前に checksum を検証し、不一致ならインストールを失敗させます。
-
-```text
-campus-lms-v<version>-windows-x64.exe.sha256
-campus-lms-v<version>-macos-arm64.sha256
-```
-
-開発者向けにソースからビルドしたい場合だけ、`CAMPUS_LMS_BUILD_FROM_SOURCE=1` を指定します。外部バイナリを直接指定する場合は `CAMPUS_LMS_BIN` を使えます。
-
-配布イメージや CI の成果物を使う場合は、README 配布手順に従ってください。
+GitHub Releases には `campus-lms-v<version>-<platform>` と `.sha256` を置きます。`postinstall` は checksum を検証してから binary を配置します。
 
 ## 主要コマンド
 
