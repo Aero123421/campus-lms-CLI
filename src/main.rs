@@ -47,8 +47,10 @@ fn run(cli: Cli) -> Result<(), CampusError> {
     match &cli.command {
         Commands::Auth { command } => match command {
             AuthCommand::Login(args) => auth::login(&cli, args),
+            AuthCommand::ImportToken(args) => auth::import_token(&cli, args),
             AuthCommand::Logout(args) => auth::logout(&cli, args),
-            AuthCommand::Status => auth::status(&cli, json),
+            AuthCommand::Status(args) => auth::status(&cli, args),
+            AuthCommand::Verify(args) => auth::verify(&cli, args),
         },
         Commands::Whoami => {
             let client = moodle::client_from_profile(&cli)?;

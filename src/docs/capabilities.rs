@@ -8,6 +8,34 @@ pub fn print() -> crate::error::Result<()> {
         "recommended_entrypoint": "campus-lms ai snapshot --days 14 --json",
         "commands": [
             {
+                "name": "auth login",
+                "read_only": true,
+                "safe_for_ai": false,
+                "description": "Request a Moodle Web Services token and verify OS credential-store persistence.",
+                "example": "campus-lms auth login --base-url https://lms.example.edu/ --username student123 --password-stdin --json"
+            },
+            {
+                "name": "auth import-token",
+                "read_only": true,
+                "safe_for_ai": false,
+                "description": "Store an administrator-issued Moodle Web Services token for SSO/MFA environments.",
+                "example": "campus-lms auth import-token --base-url https://lms.example.edu/ --username student123 --token-stdin --json"
+            },
+            {
+                "name": "auth status",
+                "read_only": true,
+                "safe_for_ai": true,
+                "description": "Show selected profile, credential target, token readability, and optional live API status.",
+                "example": "campus-lms auth status --live --json"
+            },
+            {
+                "name": "auth verify",
+                "read_only": true,
+                "safe_for_ai": true,
+                "description": "Verify profile configuration, OS credential-store roundtrip, token readability, and optional live API access.",
+                "example": "campus-lms auth verify --live --json"
+            },
+            {
                 "name": "ai snapshot",
                 "read_only": true,
                 "safe_for_ai": true,

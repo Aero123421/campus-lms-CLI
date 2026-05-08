@@ -86,8 +86,10 @@ impl CampusError {
 
     pub fn hint(&self) -> Option<&str> {
         match self {
-            Self::AuthRequired { .. } => Some("Run: campus-lms auth login"),
-            Self::AuthExpired { .. } => Some("Run: campus-lms auth login"),
+            Self::AuthRequired { .. } => {
+                Some("Run: campus-lms auth verify --json, then campus-lms auth login or auth import-token.")
+            }
+            Self::AuthExpired { .. } => Some("Run: campus-lms auth login or auth import-token."),
             Self::Network { .. } => Some("Check your network connection or Moodle base URL."),
             Self::UnsupportedMoodleFeature { .. } => {
                 Some("Ask your university LMS administrator whether Moodle Web Services or Mobile Web Services are enabled.")
@@ -96,6 +98,55 @@ impl CampusError {
             Self::Config { .. } => Some("Check campus-lms config.toml or run auth login again."),
             Self::InvalidArgument { hint, .. } => hint.as_deref(),
             _ => None,
+        }
+    }
+
+    pub fn next_steps(&self) -> Vec<&'static str> {
+        match self {
+            Self::AuthRequired { .. } => vec![
+                "Run: campus-lms auth status --json",
+                "Run: campus-lms auth verify --json",
+                "If no token is stored, run: campus-lms auth login",
+                "If your university uses SSO/MFA, use an administrator-issued token with: campus-lms auth import-token",
+            ],
+            Self::AuthExpired { .. } => vec![
+                "Run: campus-lms auth status --live --json",
+                "Run: campus-lms auth login",
+                "If password login is blocked by SSO/MFA, run: campus-lms auth import-token",
+            ],
+            Self::PermissionDenied { .. } => vec![
+                "Run: campus-lms doctor --json",
+                "Ask the LMS administrator whether Mobile Web Services are enabled for your account.",
+            ],
+            Self::UnsupportedMoodleFeature { .. } => vec![
+                "Run: campus-lms doctor --json",
+                "Ask the LMS administrator whether the missing Moodle Web Service function is enabled.",
+            ],
+            Self::Keychain { .. } => vec![
+                "Run: campus-lms auth verify --json",
+                "Check whether the OS credential store is available.",
+                "On Windows, check Windows Credential Manager access and reinstall the latest campus-lms build.",
+            ],
+            Self::Network { .. } => vec![
+                "Check the Moodle base URL.",
+                "Check network, VPN, proxy, or captive portal requirements.",
+                "Run: campus-lms doctor --json",
+            ],
+            Self::RateLimited { .. } => vec![
+                "Wait and retry later.",
+                "Use --offline when cached data is acceptable.",
+            ],
+            Self::MoodleApi { .. } => vec![
+                "Run: campus-lms doctor --json",
+                "Check whether Moodle Web Services are enabled for this site and token.",
+            ],
+            Self::Config { .. } => vec![
+                "Run: campus-lms auth status --json",
+                "Run: campus-lms init",
+                "Run: campus-lms auth login",
+            ],
+            Self::InvalidArgument { .. } => vec!["Run the command with --help to see valid arguments."],
+            _ => Vec::new(),
         }
     }
 
@@ -185,4 +236,5 @@ pub struct ErrorBody<'a> {
     pub message: String,
     pub retryable: bool,
     pub hint: Option<&'a str>,
+    pub next_steps: Vec<&'a str>,
 }

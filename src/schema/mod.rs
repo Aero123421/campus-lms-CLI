@@ -6,8 +6,9 @@ use serde_json::{json, Value};
 use crate::{
     cli::SchemaCommand,
     dto::{
-        AiSnapshotOutput, AssignmentOutput, AuthLoginOutput, AuthLogoutOutput, AuthStatusOutput,
-        CoursesOutput, DoctorOutput, SchemaListOutput, TodoOutput, WhoamiOutput,
+        AiSnapshotOutput, AssignmentOutput, AuthImportTokenOutput, AuthLoginOutput,
+        AuthLogoutOutput, AuthStatusOutput, AuthVerifyOutput, CoursesOutput, DoctorOutput,
+        SchemaListOutput, TodoOutput, WhoamiOutput,
     },
     error::CampusError,
     output,
@@ -15,8 +16,10 @@ use crate::{
 
 const SCHEMAS: &[&str] = &[
     "auth_login.v1",
+    "auth_import_token.v1",
     "auth_logout.v1",
     "auth_status.v1",
+    "auth_verify.v1",
     "whoami.v1",
     "doctor.v1",
     "courses.v1",
@@ -49,11 +52,17 @@ fn show(name: &str) -> crate::error::Result<()> {
         "auth_login.v1" | "campus-lms.auth_login.v1" => {
             generated_schema::<AuthLoginOutput>("campus-lms.auth_login.v1")?
         }
+        "auth_import_token.v1" | "campus-lms.auth_import_token.v1" => {
+            generated_schema::<AuthImportTokenOutput>("campus-lms.auth_import_token.v1")?
+        }
         "auth_logout.v1" | "campus-lms.auth_logout.v1" => {
             generated_schema::<AuthLogoutOutput>("campus-lms.auth_logout.v1")?
         }
         "auth_status.v1" | "campus-lms.auth_status.v1" => {
             generated_schema::<AuthStatusOutput>("campus-lms.auth_status.v1")?
+        }
+        "auth_verify.v1" | "campus-lms.auth_verify.v1" => {
+            generated_schema::<AuthVerifyOutput>("campus-lms.auth_verify.v1")?
         }
         "whoami.v1" | "campus-lms.whoami.v1" => {
             generated_schema::<WhoamiOutput>("campus-lms.whoami.v1")?
@@ -102,7 +111,17 @@ fn show(name: &str) -> crate::error::Result<()> {
             &["schema_version", "error"],
             json!({
                 "schema_version": {"const": "campus-lms.error.v1"},
-                "error": {"type": "object"}
+                "error": {
+                    "type": "object",
+                    "required": ["code", "message", "retryable", "hint", "next_steps"],
+                    "properties": {
+                        "code": {"type": "string"},
+                        "message": {"type": "string"},
+                        "retryable": {"type": "boolean"},
+                        "hint": {"type": ["string", "null"]},
+                        "next_steps": {"type": "array", "items": {"type": "string"}}
+                    }
+                }
             }),
         ),
         "init.v1" | "campus-lms.init.v1" => static_schema(

@@ -28,6 +28,7 @@ pub fn print_error(err: &CampusError) -> Result<()> {
             message: err.to_string(),
             retryable: err.retryable(),
             hint: err.hint(),
+            next_steps: err.next_steps(),
         },
     };
     let text = serde_json::to_string_pretty(&response).map_err(|json_err| CampusError::Parse {

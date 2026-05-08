@@ -110,10 +110,16 @@ pub struct AuthStatusOutput {
     pub generated_at: String,
     pub authenticated: bool,
     pub profile: String,
+    pub active_profile: String,
+    pub config_path: Option<String>,
     pub base_url: Option<String>,
     pub username: Option<String>,
+    pub credential_target: Option<crate::keychain::CredentialTarget>,
     pub token_available: bool,
+    pub token_readable: bool,
+    pub live_ok: Option<bool>,
     pub warnings: Vec<Warning>,
+    pub next_steps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -124,7 +130,24 @@ pub struct AuthLoginOutput {
     pub profile: String,
     pub base_url: String,
     pub username: String,
+    pub credential_target: crate::keychain::CredentialTarget,
+    pub token_verified: bool,
     pub warnings: Vec<Warning>,
+    pub next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct AuthImportTokenOutput {
+    pub schema_version: &'static str,
+    pub generated_at: String,
+    pub authenticated: bool,
+    pub profile: String,
+    pub base_url: String,
+    pub username: String,
+    pub credential_target: crate::keychain::CredentialTarget,
+    pub token_verified: bool,
+    pub warnings: Vec<Warning>,
+    pub next_steps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -134,6 +157,25 @@ pub struct AuthLogoutOutput {
     pub logged_out: bool,
     pub profile: String,
     pub warnings: Vec<Warning>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct AuthVerifyOutput {
+    pub schema_version: &'static str,
+    pub generated_at: String,
+    pub profile: String,
+    pub active_profile: String,
+    pub config_path: Option<String>,
+    pub profile_configured: bool,
+    pub base_url: Option<String>,
+    pub username: Option<String>,
+    pub credential_target: Option<crate::keychain::CredentialTarget>,
+    pub backend_roundtrip_ok: bool,
+    pub token_available: bool,
+    pub token_readable: bool,
+    pub live_ok: Option<bool>,
+    pub warnings: Vec<Warning>,
+    pub next_steps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -309,11 +351,17 @@ pub struct DoctorOutput {
     pub schema_version: &'static str,
     pub generated_at: String,
     pub profile: String,
+    pub active_profile: String,
+    pub config_path: Option<String>,
     pub base_url: Option<String>,
+    pub username: Option<String>,
+    pub credential_target: Option<crate::keychain::CredentialTarget>,
     pub authenticated: bool,
     pub checks: Vec<DoctorCheck>,
     pub missing_functions: Vec<String>,
+    pub unchecked_functions: Vec<String>,
     pub warnings: Vec<Warning>,
+    pub next_steps: Vec<String>,
 }
 
 #[cfg(test)]

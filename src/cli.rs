@@ -99,13 +99,28 @@ pub enum AuthCommand {
     #[command(
         about = "Store a Moodle Web Services token in the OS credential store",
         long_about = "Prompts for a Moodle base URL, username, and password, then requests a token from /login/token.php and stores the token in the OS credential store.\n\nThis does not bypass SSO or MFA. If password login is disabled by the university, ask whether Moodle Mobile Web Services or user token issuance is available.",
-        after_help = "Examples:\n  campus-lms auth login\n  campus-lms auth login --base-url https://lms.example.edu/moodle/ --username student123\n  campus-lms auth login --json --base-url https://lms.example.edu/ --username student123\n\nNotes:\n  Passwords are never saved.\n  The default Moodle service is moodle_mobile_app."
+        after_help = "Examples:\n  campus-lms auth login\n  campus-lms auth login --base-url https://lms.example.edu/moodle/ --username student123\n  $env:MOODLE_PASSWORD = \"...\"; campus-lms auth login --json --base-url https://lms.example.edu/ --username student123 --password-env MOODLE_PASSWORD\n  Get-Content .\\password.txt | campus-lms auth login --json --base-url https://lms.example.edu/ --username student123 --password-stdin\n\nNotes:\n  Passwords are never saved.\n  The default Moodle service is moodle_mobile_app.\n  Login verifies that the token can be read back from the OS credential store before reporting success."
     )]
     Login(LoginArgs),
+    #[command(
+        name = "import-token",
+        about = "Store an existing Moodle Web Services token",
+        long_about = "Stores an administrator-issued or manually generated Moodle Web Services token in the OS credential store.\n\nUse this when password login is blocked by SSO/MFA but Moodle Web Services tokens are allowed by the university.",
+        after_help = "Examples:\n  $env:MOODLE_TOKEN = \"...\"; campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-env MOODLE_TOKEN --json\n  Get-Content .\\token.txt | campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-stdin --json"
+    )]
+    ImportToken(ImportTokenArgs),
     #[command(about = "Delete the stored token for the selected profile")]
     Logout(LogoutArgs),
-    #[command(about = "Check whether a profile and token are available")]
-    Status,
+    #[command(
+        about = "Check whether a profile and token are available",
+        after_help = "Examples:\n  campus-lms auth status\n  campus-lms auth status --json\n  campus-lms auth status --live --json"
+    )]
+    Status(AuthStatusArgs),
+    #[command(
+        about = "Verify profile, credential-store roundtrip, and optional Moodle API access",
+        after_help = "Examples:\n  campus-lms auth verify --json\n  campus-lms auth verify --live --json\n\nThis command prints the credential target name without printing the token."
+    )]
+    Verify(AuthVerifyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -132,12 +147,76 @@ pub struct LoginArgs {
         help = "Allow http://localhost or http://127.0.0.1 for local Moodle development only"
     )]
     pub allow_insecure_localhost: bool,
+
+    #[arg(
+        long,
+        help = "Read the Moodle password from standard input instead of prompting"
+    )]
+    pub password_stdin: bool,
+
+    #[arg(
+        long,
+        value_name = "ENV",
+        help = "Read the Moodle password from an environment variable"
+    )]
+    pub password_env: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ImportTokenArgs {
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "Moodle base URL, for example https://lms.example.edu/moodle/"
+    )]
+    pub base_url: String,
+
+    #[arg(long, value_name = "USER", help = "Moodle username for the token")]
+    pub username: String,
+
+    #[arg(
+        long,
+        default_value = "moodle_mobile_app",
+        help = "Moodle external service shortname"
+    )]
+    pub service: String,
+
+    #[arg(
+        long,
+        help = "Allow http://localhost or http://127.0.0.1 for local Moodle development only"
+    )]
+    pub allow_insecure_localhost: bool,
+
+    #[arg(long, help = "Read the Moodle token from standard input")]
+    pub token_stdin: bool,
+
+    #[arg(
+        long,
+        value_name = "ENV",
+        help = "Read the Moodle token from an environment variable"
+    )]
+    pub token_env: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct LogoutArgs {
     #[arg(long, help = "Delete only the token and keep profile config")]
     pub keep_config: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AuthStatusArgs {
+    #[arg(long, help = "Also call Moodle to verify that the token still works")]
+    pub live: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AuthVerifyArgs {
+    #[arg(
+        long,
+        help = "Also call Moodle to verify API access and token validity"
+    )]
+    pub live: bool,
 }
 
 #[derive(Debug, Args, Clone)]
