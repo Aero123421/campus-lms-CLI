@@ -10,8 +10,8 @@ use clap::{Args, Parser, Subcommand};
     after_help = "Recommended AI entrypoint:\n  campus-lms ai snapshot --days 14 --json\n\nSafety:\n  Read-only by default. Tokens and passwords are never printed."
 )]
 pub struct Cli {
-    #[arg(long, global = true, default_value = "default")]
-    pub profile: String,
+    #[arg(long, global = true)]
+    pub profile: Option<String>,
 
     #[arg(long, global = true)]
     pub config: Option<std::path::PathBuf>,
@@ -39,6 +39,7 @@ pub enum Commands {
         command: AuthCommand,
     },
     Whoami,
+    Doctor,
     Courses(CachedArgs),
     Todo(TodoArgs),
     Assignment {
@@ -223,4 +224,55 @@ pub fn ensure_cache_flags(refresh: bool, offline: bool) -> crate::error::Result<
         ));
     }
     Ok(())
+}
+
+pub fn ensure_profile_name(profile: &str) -> crate::error::Result<()> {
+    let valid = !profile.is_empty()
+        && profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(crate::error::CampusError::invalid_argument(
+            "profile must contain only letters, numbers, dot, underscore, or hyphen.",
+            Some("Use a profile name such as default, school, or my-university."),
+        ))
+    }
+}
+
+pub fn ensure_days(days: u32) -> crate::error::Result<()> {
+    if (1..=365).contains(&days) {
+        Ok(())
+    } else {
+        Err(crate::error::CampusError::invalid_argument(
+            "--days must be between 1 and 365.",
+            Some("For the AI entrypoint, use: campus-lms ai snapshot --days 14 --json"),
+        ))
+    }
+}
+
+pub fn ensure_max_items(max_items: Option<usize>) -> crate::error::Result<()> {
+    match max_items {
+        Some(0) => Err(crate::error::CampusError::invalid_argument(
+            "--max-items must be at least 1.",
+            None,
+        )),
+        Some(value) if value > 500 => Err(crate::error::CampusError::invalid_argument(
+            "--max-items must be 500 or less.",
+            None,
+        )),
+        _ => Ok(()),
+    }
+}
+
+pub fn ensure_max_chars(max_chars: usize) -> crate::error::Result<()> {
+    if max_chars <= 100_000 {
+        Ok(())
+    } else {
+        Err(crate::error::CampusError::invalid_argument(
+            "--max-chars must be 100000 or less.",
+            None,
+        ))
+    }
 }

@@ -6,6 +6,8 @@ mod cache;
 mod cli;
 mod config;
 mod docs;
+mod doctor;
+mod dto;
 mod error;
 mod keychain;
 mod lifecycle;
@@ -15,6 +17,7 @@ mod schema;
 
 use clap::Parser;
 use cli::{AssignmentCommand, AuthCommand, Cli, Commands};
+use dto::{UserInfo, WhoamiOutput};
 use error::CampusError;
 
 fn main() {
@@ -38,6 +41,9 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), CampusError> {
     let json = cli.json;
+    if let Some(profile) = &cli.profile {
+        cli::ensure_profile_name(profile).map_err(|err| err.with_json(json))?;
+    }
     match &cli.command {
         Commands::Auth { command } => match command {
             AuthCommand::Login(args) => auth::login(&cli, args),
@@ -47,18 +53,19 @@ fn run(cli: Cli) -> Result<(), CampusError> {
         Commands::Whoami => {
             let client = moodle::client_from_profile(&cli)?;
             let site = client.site_info()?;
-            output::print_json(&serde_json::json!({
-                "schema_version": "campus-lms.whoami.v1",
-                "generated_at": output::generated_at(),
-                "user": {
-                    "id": format!("user:{}", site.userid),
-                    "username": site.username,
-                    "fullname": site.fullname,
-                    "site_name": site.sitename
+            output::print_json(&WhoamiOutput {
+                schema_version: "campus-lms.whoami.v1",
+                generated_at: output::generated_at(),
+                user: UserInfo {
+                    id: format!("user:{}", site.userid),
+                    username: site.username,
+                    fullname: site.fullname,
+                    site_name: site.sitename,
                 },
-                "warnings": []
-            }))
+                warnings: Vec::new(),
+            })
         }
+        Commands::Doctor => doctor::run(&cli),
         Commands::Courses(args) => moodle::courses::run(&cli, args),
         Commands::Todo(args) => moodle::calendar::todo(&cli, args),
         Commands::Assignment { command } => match command {

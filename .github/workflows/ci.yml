@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   rust:
     name: Rust checks
@@ -18,14 +21,29 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install Rust audit tools
+        run: cargo install cargo-audit cargo-deny cargo-machete --locked
+
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Build
+        run: cargo build --locked
+
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --locked
+
+      - name: Security advisories
+        run: cargo audit
+
+      - name: License and dependency policy
+        run: cargo deny check
+
+      - name: Unused dependencies
+        run: cargo machete
 
   npm:
     name: npm wrapper
@@ -45,6 +63,9 @@ jobs:
       - name: Install without postinstall
         run: npm ci --ignore-scripts
 
+      - name: npm audit
+        run: npm audit --audit-level=moderate
+
       - name: Build native binary
         run: npm run build:native
 
@@ -53,3 +74,17 @@ jobs:
 
       - name: Test npm package layout
         run: npm pack --dry-run
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4

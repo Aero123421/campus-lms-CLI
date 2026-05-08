@@ -9,11 +9,19 @@ const { executableName, packagePlatform } = require("./platform");
 const root = path.resolve(__dirname, "..");
 const exe = executableName();
 const platform = packagePlatform();
+const overrideBinary = process.env.CAMPUS_LMS_BIN
+  ? path.resolve(process.env.CAMPUS_LMS_BIN)
+  : null;
+
+if (process.env.CAMPUS_LMS_BIN && !path.isAbsolute(process.env.CAMPUS_LMS_BIN)) {
+  console.error("CAMPUS_LMS_BIN must be an absolute path.");
+  process.exit(1);
+}
 
 const candidates = [
-  process.env.CAMPUS_LMS_BIN,
-  platform && path.join(root, "npm", "prebuilt", platform, exe),
+  overrideBinary,
   path.join(root, "npm", "bin", exe),
+  platform && path.join(root, "npm", "prebuilt", platform, exe),
   path.join(root, "target", "release", exe),
   path.join(root, "target", "debug", exe)
 ].filter(Boolean);

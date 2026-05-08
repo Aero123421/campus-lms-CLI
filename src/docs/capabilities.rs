@@ -36,6 +36,13 @@ pub fn print() -> crate::error::Result<()> {
                 "example": "campus-lms todo --days 14 --json"
             },
             {
+                "name": "doctor",
+                "read_only": true,
+                "safe_for_ai": true,
+                "description": "Diagnose profile, token, and Moodle Web Services function availability.",
+                "example": "campus-lms doctor --json"
+            },
+            {
                 "name": "init",
                 "read_only": true,
                 "safe_for_ai": true,

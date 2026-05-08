@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    cli::{AiCommand, Cli, TodoArgs},
+    cli::{ensure_days, ensure_max_items, AiCommand, Cli, TodoArgs},
+    config,
+    dto::{AiSnapshotOutput, DateRange, PrivacyOutput, SnapshotCourse, SummaryOutput, Warning},
     moodle::calendar,
     output,
 };
@@ -14,20 +16,22 @@ pub fn run(cli: &Cli, command: &AiCommand) -> crate::error::Result<()> {
 }
 
 fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Result<()> {
+    ensure_days(args.days).map_err(|err| err.with_json(cli.json))?;
+    ensure_max_items(Some(args.max_items)).map_err(|err| err.with_json(cli.json))?;
     let mut warnings = Vec::new();
     if args.include_grades {
-        warnings.push(serde_json::json!({
-            "code": "GRADES_NOT_IMPLEMENTED",
-            "message": "--include-grades is accepted for CLI compatibility, but grade retrieval is not implemented in this MVP.",
-            "hint": "Do not assume grades are present in this snapshot."
-        }));
+        warnings.push(Warning::new(
+            "GRADES_NOT_IMPLEMENTED",
+            "--include-grades is accepted for CLI compatibility, but grade retrieval is not implemented in this MVP.",
+            Some("Do not assume grades are present in this snapshot.".to_string()),
+        ));
     }
     if args.include_feedback {
-        warnings.push(serde_json::json!({
-            "code": "FEEDBACK_NOT_IMPLEMENTED",
-            "message": "--include-feedback is accepted for CLI compatibility, but feedback retrieval is not implemented in this MVP.",
-            "hint": "Use assignment detail commands only for assignment text and submission metadata."
-        }));
+        warnings.push(Warning::new(
+            "FEEDBACK_NOT_IMPLEMENTED",
+            "--include-feedback is accepted for CLI compatibility, but feedback retrieval is not implemented in this MVP.",
+            Some("Use assignment detail commands only for assignment text and submission metadata.".to_string()),
+        ));
     }
     let todo_args = TodoArgs {
         days: args.days,
@@ -37,7 +41,9 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         include_submitted: false,
         course: None,
     };
-    let payload = calendar::fetch(cli, &todo_args).map_err(|err| err.with_json(cli.json))?;
+    let fetched = calendar::fetch(cli, &todo_args).map_err(|err| err.with_json(cli.json))?;
+    let payload = fetched.payload;
+    warnings.extend(payload.warnings.clone());
     let pending_count = payload.items.len();
     let overdue_count = payload
         .items
@@ -50,42 +56,52 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         .filter(|item| item.priority_hint == "high")
         .count();
 
-    let mut courses = Vec::new();
+    let mut courses: Vec<SnapshotCourse> = Vec::new();
     for item in &payload.items {
         if let Some(course_id) = &item.course_id {
-            if !courses.iter().any(|course: &serde_json::Value| {
-                course.get("id").and_then(|value| value.as_str()) == Some(course_id.as_str())
-            }) {
-                courses.push(serde_json::json!({
-                    "id": course_id,
-                    "name": item.course_name
-                }));
+            if !courses.iter().any(|course| course.id == *course_id) {
+                courses.push(SnapshotCourse {
+                    id: course_id.clone(),
+                    name: item.course_name.clone(),
+                });
             }
         }
     }
 
-    output::print_json(&serde_json::json!({
-        "schema_version": "campus-lms.ai_snapshot.v1",
-        "generated_at": output::generated_at(),
-        "privacy": {
-            "grades_included": false,
-            "feedback_included": false,
-            "user_email_included": false
+    let config = config::load(cli).map_err(|err| err.with_json(cli.json))?;
+    if config.privacy.include_grades_in_ai_snapshot
+        || config.privacy.include_feedback_in_ai_snapshot
+    {
+        warnings.push(Warning::new(
+            "PRIVACY_CONFIG_NOT_IMPLEMENTED",
+            "Privacy config for grades/feedback is recorded but those data types are not fetched by this CLI yet.",
+            Some("The snapshot remains grades_included=false and feedback_included=false.".to_string()),
+        ));
+    }
+
+    output::print_json(&AiSnapshotOutput {
+        schema_version: "campus-lms.ai_snapshot.v1",
+        generated_at: output::generated_at(),
+        privacy: PrivacyOutput {
+            grades_included: false,
+            feedback_included: false,
+            user_email_included: false,
         },
-        "range": {
-            "from": payload.range_from,
-            "to": payload.range_to,
-            "timezone": "UTC"
+        range: DateRange {
+            from: payload.range_from,
+            to: payload.range_to,
+            timezone: "UTC".to_string(),
         },
-        "summary": {
-            "pending_count": pending_count,
-            "overdue_count": overdue_count,
-            "due_within_48h_count": due_within_48h_count
+        summary: SummaryOutput {
+            pending_count,
+            overdue_count,
+            due_within_48h_count,
         },
-        "courses": courses,
-        "pending_tasks": payload.items,
-        "warnings": warnings
-    }))
+        courses: courses.clone(),
+        courses_in_pending_tasks: courses,
+        pending_tasks: payload.items,
+        warnings,
+    })
 }
 
 fn instructions() -> crate::error::Result<()> {

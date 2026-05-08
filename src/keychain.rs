@@ -29,13 +29,7 @@ pub fn delete_token(profile: &Profile) -> crate::error::Result<()> {
         .map_err(|err| CampusError::keychain(err.to_string()))?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
-        Err(err) => {
-            let message = err.to_string();
-            if message.to_ascii_lowercase().contains("not found") {
-                Ok(())
-            } else {
-                Err(CampusError::keychain(message))
-            }
-        }
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(CampusError::keychain(err.to_string())),
     }
 }

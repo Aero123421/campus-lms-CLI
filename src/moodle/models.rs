@@ -17,6 +17,21 @@ pub struct SiteInfo {
     pub fullname: Option<String>,
     #[serde(default)]
     pub sitename: Option<String>,
+    #[serde(default)]
+    pub siteurl: Option<String>,
+    #[serde(default)]
+    pub downloadfiles: Option<i64>,
+    #[serde(default)]
+    pub uploadfiles: Option<i64>,
+    #[serde(default)]
+    pub functions: Vec<WebServiceFunction>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebServiceFunction {
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

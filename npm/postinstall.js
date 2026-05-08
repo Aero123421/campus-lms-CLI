@@ -19,6 +19,8 @@ const platform = packagePlatform();
 const prebuiltBinary = platform ? path.join(root, "npm", "prebuilt", platform, exe) : null;
 const installedBinary = path.join(root, "npm", "bin", exe);
 const releaseBinary = path.join(root, "target", "release", exe);
+const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_REDIRECTS = 5;
 
 if (prebuiltBinary && fs.existsSync(prebuiltBinary)) {
   fs.mkdirSync(path.dirname(installedBinary), { recursive: true });
@@ -148,10 +150,30 @@ function buildFromSource() {
   markExecutable(installedBinary);
 }
 
-function download(url, target) {
+function download(url, target, redirects = 0) {
   return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (error) {
+      reject(new Error(`Invalid download URL ${url}: ${error.message}`));
+      return;
+    }
+    if (parsed.protocol !== "https:") {
+      reject(new Error(`Refusing non-HTTPS download URL: ${url}`));
+      return;
+    }
+    let settled = false;
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      fs.rmSync(target, { force: true });
+      reject(error);
+    };
     const request = https.get(
-      url,
+      parsed,
       {
         headers: {
           "User-Agent": `campus-lms-cli/${pkg.version}`
@@ -160,21 +182,52 @@ function download(url, target) {
       (response) => {
         if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
           response.resume();
-          download(response.headers.location, target).then(resolve, reject);
+          if (redirects >= MAX_REDIRECTS) {
+            fail(new Error(`Too many redirects while downloading ${url}`));
+            return;
+          }
+          if (!response.headers.location) {
+            fail(new Error(`Redirect from ${url} did not include a Location header.`));
+            return;
+          }
+          const nextUrl = new URL(response.headers.location, parsed).toString();
+          download(nextUrl, target, redirects + 1).then(resolve, reject);
           return;
         }
         if (response.statusCode !== 200) {
           response.resume();
-          reject(new Error(`Failed to download ${url}: HTTP ${response.statusCode}`));
+          fail(new Error(`Failed to download ${url}: HTTP ${response.statusCode}`));
           return;
         }
+        const contentLength = Number(response.headers["content-length"] || "0");
+        if (contentLength > MAX_DOWNLOAD_BYTES) {
+          response.resume();
+          fail(new Error(`Download is too large: ${url}`));
+          return;
+        }
+        let received = 0;
         const file = fs.createWriteStream(target);
+        response.on("data", (chunk) => {
+          received += chunk.length;
+          if (received > MAX_DOWNLOAD_BYTES) {
+            response.destroy();
+            file.destroy();
+            fail(new Error(`Download exceeded ${MAX_DOWNLOAD_BYTES} bytes: ${url}`));
+          }
+        });
         response.pipe(file);
-        file.on("finish", () => file.close(resolve));
-        file.on("error", reject);
+        file.on("finish", () =>
+          file.close(() => {
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          })
+        );
+        file.on("error", fail);
       }
     );
-    request.on("error", reject);
+    request.on("error", fail);
   });
 }
 

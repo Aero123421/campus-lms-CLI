@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -123,26 +128,72 @@ pub fn load(cli: &Cli) -> crate::error::Result<Config> {
 pub fn save(cli: &Cli, config: &Config) -> crate::error::Result<()> {
     let path = config_path(cli)?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
+        create_private_dir(parent).map_err(|err| {
             CampusError::config(format!("failed to create {}: {err}", parent.display()))
         })?;
     }
     let text = toml::to_string_pretty(config)
         .map_err(|err| CampusError::config(format!("failed to serialize config: {err}")))?;
-    fs::write(&path, text)
+    write_private(&path, &text)
         .map_err(|err| CampusError::config(format!("failed to write {}: {err}", path.display())))
 }
 
 pub fn active_profile<'a>(cli: &Cli, config: &'a Config) -> crate::error::Result<&'a Profile> {
+    let name = selected_profile_name(cli, config);
     config
         .profile
-        .get(&cli.profile)
+        .get(&name)
         .ok_or(CampusError::AuthRequired { json: cli.json })
 }
 
 pub fn remove_active_profile(cli: &Cli, config: &mut Config) {
-    config.profile.remove(&cli.profile);
-    if config.active_profile == cli.profile {
+    let name = selected_profile_name(cli, config);
+    config.profile.remove(&name);
+    if config.active_profile == name {
         config.active_profile = default_profile();
     }
+}
+
+pub fn selected_profile_name(cli: &Cli, config: &Config) -> String {
+    cli.profile
+        .clone()
+        .unwrap_or_else(|| config.active_profile.clone())
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+    }
+    fs::rename(tmp, path)?;
+    Ok(())
 }

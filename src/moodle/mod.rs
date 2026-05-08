@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod api;
 pub mod assignments;
 pub mod calendar;
 pub mod client;
