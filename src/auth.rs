@@ -220,6 +220,11 @@ pub fn status(cli: &Cli, args: &AuthStatusArgs) -> crate::error::Result<()> {
     let mut token_available = false;
     let mut token_readable = false;
     let mut live_ok = None;
+    let mut live_status = if args.live {
+        "not_checked".to_string()
+    } else {
+        "not_requested".to_string()
+    };
 
     if let Some(profile) = profile {
         match keychain::get_token_detailed(profile) {
@@ -252,9 +257,13 @@ pub fn status(cli: &Cli, args: &AuthStatusArgs) -> crate::error::Result<()> {
             match client_from_profile_data(cli, &profile_name, profile)
                 .and_then(|client| client.site_info())
             {
-                Ok(_) => live_ok = Some(true),
+                Ok(_) => {
+                    live_ok = Some(true);
+                    live_status = "verified".to_string();
+                }
                 Err(err) => {
                     live_ok = Some(false);
+                    live_status = "failed".to_string();
                     warnings.push(Warning::new(
                         err.code(),
                         err.to_string(),
@@ -264,6 +273,7 @@ pub fn status(cli: &Cli, args: &AuthStatusArgs) -> crate::error::Result<()> {
             }
         } else if args.live {
             live_ok = Some(false);
+            live_status = "not_checked".to_string();
         }
     } else {
         warnings.push(Warning::new(
@@ -285,6 +295,7 @@ pub fn status(cli: &Cli, args: &AuthStatusArgs) -> crate::error::Result<()> {
         credential_target: profile.map(keychain::credential_target),
         token_available,
         token_readable,
+        live_status,
         live_ok,
         warnings,
         next_steps: auth_next_steps(profile.is_some(), token_readable, live_ok),
@@ -318,6 +329,11 @@ pub fn verify(cli: &Cli, args: &AuthVerifyArgs) -> crate::error::Result<()> {
     let mut token_available = false;
     let mut token_readable = false;
     let mut live_ok = None;
+    let mut live_status = if args.live {
+        "not_checked".to_string()
+    } else {
+        "not_requested".to_string()
+    };
 
     if let Some(profile) = profile {
         match keychain::verify_backend_roundtrip(profile) {
@@ -356,9 +372,13 @@ pub fn verify(cli: &Cli, args: &AuthVerifyArgs) -> crate::error::Result<()> {
             match client_from_profile_data(cli, &profile_name, profile)
                 .and_then(|client| client.site_info())
             {
-                Ok(_) => live_ok = Some(true),
+                Ok(_) => {
+                    live_ok = Some(true);
+                    live_status = "verified".to_string();
+                }
                 Err(err) => {
                     live_ok = Some(false);
+                    live_status = "failed".to_string();
                     warnings.push(Warning::new(
                         err.code(),
                         err.to_string(),
@@ -368,6 +388,7 @@ pub fn verify(cli: &Cli, args: &AuthVerifyArgs) -> crate::error::Result<()> {
             }
         } else if args.live {
             live_ok = Some(false);
+            live_status = "not_checked".to_string();
         }
     } else {
         warnings.push(Warning::new(
@@ -390,6 +411,7 @@ pub fn verify(cli: &Cli, args: &AuthVerifyArgs) -> crate::error::Result<()> {
         backend_roundtrip_ok,
         token_available,
         token_readable,
+        live_status,
         live_ok,
         warnings,
         next_steps: auth_next_steps(profile.is_some(), token_readable, live_ok),

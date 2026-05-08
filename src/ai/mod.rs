@@ -3,7 +3,10 @@
 use crate::{
     cli::{ensure_days, ensure_max_items, AiCommand, Cli, TodoArgs},
     config,
-    dto::{AiSnapshotOutput, DateRange, PrivacyOutput, SnapshotCourse, SummaryOutput, Warning},
+    dto::{
+        warning_report, AiSnapshotOutput, DateRange, PrivacyOutput, SnapshotCourse, SummaryOutput,
+        Warning,
+    },
     moodle::calendar,
     output,
 };
@@ -19,7 +22,9 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
     ensure_days(args.days).map_err(|err| err.with_json(cli.json))?;
     ensure_max_items(Some(args.max_items)).map_err(|err| err.with_json(cli.json))?;
     let mut warnings = Vec::new();
+    let mut unsupported_flags = Vec::new();
     if args.include_grades {
+        unsupported_flags.push("include_grades".to_string());
         warnings.push(Warning::new(
             "GRADES_NOT_IMPLEMENTED",
             "--include-grades is accepted for CLI compatibility, but grade retrieval is not implemented in this MVP.",
@@ -27,6 +32,7 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         ));
     }
     if args.include_feedback {
+        unsupported_flags.push("include_feedback".to_string());
         warnings.push(Warning::new(
             "FEEDBACK_NOT_IMPLEMENTED",
             "--include-feedback is accepted for CLI compatibility, but feedback retrieval is not implemented in this MVP.",
@@ -43,6 +49,7 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
     };
     let fetched = calendar::fetch(cli, &todo_args).map_err(|err| err.with_json(cli.json))?;
     let payload = fetched.payload;
+    let total_matching_count = payload.total_items_before_limit;
     warnings.extend(payload.warnings.clone());
     let pending_count = payload.items.len();
     let overdue_count = payload
@@ -79,6 +86,8 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         ));
     }
 
+    let timezone = config.output.timezone.clone();
+    let report = warning_report(warnings);
     output::print_json(&AiSnapshotOutput {
         schema_version: "campus-lms.ai_snapshot.v1",
         generated_at: output::generated_at(),
@@ -90,9 +99,11 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         range: DateRange {
             from: payload.range_from,
             to: payload.range_to,
-            timezone: "UTC".to_string(),
+            timezone,
         },
         summary: SummaryOutput {
+            returned_count: payload.items.len(),
+            total_matching_count,
             pending_count,
             overdue_count,
             due_within_48h_count,
@@ -100,7 +111,10 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         courses: courses.clone(),
         courses_in_pending_tasks: courses,
         pending_tasks: payload.items,
-        warnings,
+        unsupported_flags,
+        warnings_summary: report.summary,
+        warnings_details_truncated: report.details_truncated,
+        warnings: report.details,
     })
 }
 

@@ -81,7 +81,10 @@ impl CampusError {
     }
 
     pub fn retryable(&self) -> bool {
-        matches!(self, Self::Network { .. } | Self::RateLimited { .. })
+        matches!(
+            self,
+            Self::Network { .. } | Self::RateLimited { .. } | Self::Cache { .. }
+        )
     }
 
     pub fn hint(&self) -> Option<&str> {
@@ -95,6 +98,9 @@ impl CampusError {
                 Some("Ask your university LMS administrator whether Moodle Web Services or Mobile Web Services are enabled.")
             }
             Self::Keychain { .. } => Some("Check whether the OS credential store is available."),
+            Self::Cache { .. } => {
+                Some("Retry the command. If it keeps failing, clear the cache with cleanup --cache.")
+            }
             Self::Config { .. } => Some("Check campus-lms config.toml or run auth login again."),
             Self::InvalidArgument { hint, .. } => hint.as_deref(),
             _ => None,

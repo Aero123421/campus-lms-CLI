@@ -11,8 +11,8 @@ use crate::{
     cli::{ensure_cache_flags, ensure_max_chars, AssignmentShowArgs, Cli},
     config,
     dto::{
-        AssignmentDetailOutput, AssignmentOutput, AssignmentSubmissionOutput, AttachmentOutput,
-        Warning,
+        warning_report, AssignmentDetailOutput, AssignmentOutput, AssignmentSubmissionOutput,
+        AttachmentOutput, Warning,
     },
     error::CampusError,
     moodle::{
@@ -75,7 +75,7 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
             json: cli.json,
         })?;
 
-    let mut warnings = all.warnings;
+    let mut warnings = filter_assignment_warnings(all.warnings, id, item.course_id.as_str());
     let submission = match client.submission_status(id) {
         Ok(submission) => {
             warnings.extend(submission.warnings.iter().map(Warning::from_moodle_warning));
@@ -139,6 +139,7 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
         })
         .collect();
 
+    let report = warning_report(warnings);
     let value = AssignmentOutput {
         schema_version: "campus-lms.assignment.v1",
         generated_at: output::generated_at(),
@@ -181,7 +182,9 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
             },
             url: assignment_url,
         },
-        warnings,
+        warnings_summary: report.summary,
+        warnings_details_truncated: report.details_truncated,
+        warnings: report.details,
     };
     let cached_value = serde_json::to_value(&value).map_err(|err| CampusError::Parse {
         message: format!("failed to serialize assignment output: {err}"),
@@ -283,6 +286,25 @@ fn redact_assignment_cache(payload: &AssignmentIndexPayload) -> AssignmentIndexP
         }
     }
     redacted
+}
+
+fn filter_assignment_warnings(
+    warnings: Vec<Warning>,
+    assignment_id: i64,
+    course_id: &str,
+) -> Vec<Warning> {
+    let course_id = course_id
+        .strip_prefix("course:")
+        .and_then(|id| id.parse::<i64>().ok());
+    warnings
+        .into_iter()
+        .filter(|warning| match (warning.item.as_deref(), warning.itemid) {
+            (Some("assign" | "assignment"), Some(itemid)) => itemid == assignment_id,
+            (Some("course"), Some(itemid)) => course_id == Some(itemid),
+            (_, Some(_)) => false,
+            _ => false,
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::{
     fs,
     io::Write,
     path::PathBuf,
+    process,
     time::{Duration, SystemTime},
 };
 
@@ -126,7 +127,15 @@ pub fn profile_namespace(
 }
 
 fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
+    let unique = format!(
+        "tmp-{}-{}",
+        process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let tmp = path.with_extension(unique);
     #[cfg(unix)]
     {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};

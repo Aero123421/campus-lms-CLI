@@ -15,7 +15,7 @@ pub fn print() -> crate::error::Result<()> {
             {"code": "UNSUPPORTED_MOODLE_FEATURE", "exit_code": 21, "retryable": false, "hint": "Ask your LMS administrator about Mobile Web Services and the token service."},
             {"code": "CONFIG_ERROR", "exit_code": 30, "retryable": false, "hint": "Run: campus-lms auth status --json or campus-lms init."},
             {"code": "KEYCHAIN_UNAVAILABLE", "exit_code": 31, "retryable": false, "hint": "Run: campus-lms auth verify --json and check OS credential store availability."},
-            {"code": "CACHE_ERROR", "exit_code": 32, "retryable": false, "hint": "Run: campus-lms cleanup --cache --dry-run first, then cleanup --cache --yes."},
+            {"code": "CACHE_ERROR", "exit_code": 32, "retryable": true, "hint": "Retry the command. If it keeps failing, run cleanup --cache --dry-run first, then cleanup --cache --yes."},
             {"code": "PARSE_ERROR", "exit_code": 40, "retryable": false, "hint": "The LMS response may not match the expected schema; run campus-lms doctor --json."}
         ]
     }))

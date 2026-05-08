@@ -3,13 +3,13 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use time::{Date, Duration as TimeDuration, OffsetDateTime};
+use time::{Date, Duration as TimeDuration, OffsetDateTime, UtcOffset};
 
 use crate::{
     cache,
     cli::{ensure_cache_flags, ensure_days, ensure_max_items, Cli, TodoArgs},
     config,
-    dto::{CacheMeta, DateRange, TodoItem, TodoOutput, Warning},
+    dto::{warning_report, CacheMeta, DateRange, TodoItem, TodoOutput, Warning},
     error::CampusError,
     moodle::{
         api::MoodleApi,
@@ -25,6 +25,7 @@ pub struct TodoPayload {
     pub range_from: String,
     pub range_to: String,
     pub items: Vec<TodoItem>,
+    pub total_items_before_limit: usize,
     pub warnings: Vec<Warning>,
 }
 
@@ -39,17 +40,21 @@ pub fn todo(cli: &Cli, args: &TodoArgs) -> crate::error::Result<()> {
     ensure_days(args.days).map_err(|err| err.with_json(cli.json))?;
     ensure_max_items(args.max_items).map_err(|err| err.with_json(cli.json))?;
     let fetched = fetch(cli, args).map_err(|err| err.with_json(cli.json))?;
+    let report = warning_report(fetched.payload.warnings);
     output::print_json(&TodoOutput {
         schema_version: "campus-lms.todo.v1",
         generated_at: output::generated_at(),
         range: DateRange {
             from: fetched.payload.range_from,
             to: fetched.payload.range_to,
-            timezone: "UTC".to_string(),
+            timezone: configured_timezone(cli),
         },
         cache: fetched.cache,
+        total_items_before_limit: fetched.payload.total_items_before_limit,
         items: fetched.payload.items,
-        warnings: fetched.payload.warnings,
+        warnings_summary: report.summary,
+        warnings_details_truncated: report.details_truncated,
+        warnings: report.details,
     })
 }
 
@@ -64,8 +69,8 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let cache_key = cache::key(
         "todo",
         &format!(
-            "{}:{}:{:?}:{}",
-            namespace, args.days, args.course, args.include_submitted
+            "v3:{}:{}:{:?}:{}:{:?}",
+            namespace, args.days, args.course, args.include_submitted, args.max_items
         ),
     );
     let ttl_seconds = profile.cache_ttl_seconds;
@@ -83,15 +88,16 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let client = client_from_profile_data(cli, &profile_name, profile)?;
     let now = OffsetDateTime::now_utc();
     let to = now + TimeDuration::days(args.days as i64);
+    let timezone = config.output.timezone.clone();
     let mut items = Vec::new();
     let mut warnings = Vec::new();
     let command_prefix = command_prefix(cli);
 
     match fetch_action_events(&client, now.unix_timestamp(), to.unix_timestamp()) {
         Ok((events, event_warnings)) => {
-            warnings.extend(event_warnings);
+            warnings.extend(filter_warnings_for_course(event_warnings, args.course.as_deref()));
             items.extend(events.into_iter().filter_map(|event| {
-            let due = event.timesort.or(event.timestart);
+            let due = valid_due(event.timesort.or(event.timestart));
             let course_id = event
                 .course
                 .as_ref()
@@ -131,6 +137,11 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
                 } else {
                     "completed_or_not_actionable".to_string()
                 },
+                status_reason: Some(if actionable {
+                    "Moodle calendar action is marked actionable.".to_string()
+                } else {
+                    "Moodle calendar action is marked not actionable.".to_string()
+                }),
                 status_source: "calendar_action".to_string(),
                 priority_hint: priority(due, now.unix_timestamp()),
                 url: event.url,
@@ -157,7 +168,10 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
         .collect::<std::collections::BTreeSet<_>>();
 
     let assignments = fetch_assignments(cli, args.refresh, args.offline)?;
-    warnings.extend(assignments.warnings);
+    warnings.extend(filter_warnings_for_course(
+        assignments.warnings,
+        args.course.as_deref(),
+    ));
     for item in assignments.items {
         let assignment_id = format!("assign:{}", item.assignment.id);
         if existing_assignment_ids.contains(&assignment_id) {
@@ -168,22 +182,38 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
                 continue;
             }
         }
-        let due = item.assignment.duedate;
+        let due = valid_due(item.assignment.duedate);
         if due.is_some_and(|due| due > to.unix_timestamp()) {
             continue;
         }
+        let due_at = ts(due);
+        if items.iter().any(|existing| {
+            existing.course_id.as_deref() == Some(item.course_id.as_str())
+                && existing.title.as_deref() == item.assignment.name.as_deref()
+                && existing.due_at == due_at
+        }) {
+            continue;
+        }
         let mut status = "unknown".to_string();
+        let mut status_reason = "submission status was not checked.".to_string();
         let mut status_source = "assignment_fallback".to_string();
         if !args.include_submitted {
             match assignment_submission_status(&client, item.assignment.id) {
                 Ok(Some(submission_status)) => {
                     status_source = "submission_status".to_string();
+                    status_reason = format!(
+                        "Moodle submission status API returned status '{submission_status}'."
+                    );
                     status = submission_status;
                     if status == "submitted" {
                         continue;
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    status_reason =
+                        "Moodle submission status API did not include a submission status."
+                            .to_string();
+                }
                 Err(err) => warnings.push(Warning::new(
                     "SUBMISSION_STATUS_UNAVAILABLE",
                     err.to_string(),
@@ -193,6 +223,9 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
                     ),
                 )),
             }
+        } else {
+            status_reason =
+                "--include-submitted was used, so submitted status was not filtered.".to_string();
         }
         items.push(TodoItem {
             id: assignment_id,
@@ -200,9 +233,10 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
             course_id: Some(item.course_id),
             course_name: item.course_name,
             title: item.assignment.name,
-            due_at: ts(due),
+            due_at,
             due_in_seconds: due.map(|due| due - now.unix_timestamp()),
             status,
+            status_reason: Some(status_reason),
             status_source,
             priority_hint: priority(due, now.unix_timestamp()),
             url: None,
@@ -214,14 +248,17 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     }
 
     items.sort_by_key(|item| item.due_in_seconds.unwrap_or(i64::MAX));
+    let total_items_before_limit = items.len();
     if let Some(max) = args.max_items {
         items.truncate(max);
     }
+    let (range_from, range_to) = date_range(now, to, &timezone);
 
     let payload = TodoPayload {
-        range_from: date(now.date()),
-        range_to: date(to.date()),
+        range_from,
+        range_to,
         items,
+        total_items_before_limit,
         warnings,
     };
     cache::set(&cache_key, &payload)?;
@@ -276,6 +313,52 @@ pub fn priority(due: Option<i64>, now: i64) -> String {
         Some(_) => "low".to_string(),
         None => "unknown".to_string(),
     }
+}
+
+fn valid_due(timestamp: Option<i64>) -> Option<i64> {
+    timestamp.filter(|timestamp| *timestamp > 0)
+}
+
+fn configured_timezone(cli: &Cli) -> String {
+    config::load(cli)
+        .ok()
+        .map(|config| config.output.timezone)
+        .unwrap_or_else(|| "UTC".to_string())
+}
+
+fn date_range(from: OffsetDateTime, to: OffsetDateTime, timezone: &str) -> (String, String) {
+    let offset = match timezone {
+        "Asia/Tokyo" => UtcOffset::from_hms(9, 0, 0).ok(),
+        "UTC" => UtcOffset::from_hms(0, 0, 0).ok(),
+        _ => None,
+    };
+    match offset {
+        Some(offset) => (
+            date(from.to_offset(offset).date()),
+            date(to.to_offset(offset).date()),
+        ),
+        None => (date(from.date()), date(to.date())),
+    }
+}
+
+fn filter_warnings_for_course(warnings: Vec<Warning>, course: Option<&str>) -> Vec<Warning> {
+    let Some(course) = course else {
+        return warnings;
+    };
+    let Some(course_id) = course
+        .strip_prefix("course:")
+        .and_then(|id| id.parse::<i64>().ok())
+    else {
+        return warnings;
+    };
+    warnings
+        .into_iter()
+        .filter(|warning| match (warning.item.as_deref(), warning.itemid) {
+            (Some("course"), Some(itemid)) => itemid == course_id,
+            (_, Some(_)) => false,
+            _ => false,
+        })
+        .collect()
 }
 
 fn date(date: Date) -> String {
@@ -374,5 +457,11 @@ mod tests {
         assert_eq!(events.len(), 60);
         assert!(warnings.is_empty());
         assert_eq!(api.calls.into_inner(), vec![0, 50]);
+    }
+
+    #[test]
+    fn zero_due_date_is_not_overdue() {
+        assert_eq!(valid_due(Some(0)), None);
+        assert_eq!(priority(valid_due(Some(0)), 100), "unknown");
     }
 }

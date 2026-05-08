@@ -27,6 +27,7 @@ const SCHEMAS: &[&str] = &[
     "assignment.v1",
     "ai_snapshot.v1",
     "schema_list.v1",
+    "schema_show.v1",
     "capabilities.v1",
     "errors.v1",
     "error.v1",
@@ -83,6 +84,16 @@ fn show(name: &str) -> crate::error::Result<()> {
         "schema_list.v1" | "campus-lms.schema_list.v1" => {
             generated_schema::<SchemaListOutput>("campus-lms.schema_list.v1")?
         }
+        "schema_show.v1" | "campus-lms.schema_show.v1" => static_schema(
+            "campus-lms.schema_show.v1",
+            &["schema_version", "generated_at", "name", "schema"],
+            json!({
+                "schema_version": {"const": "campus-lms.schema_show.v1"},
+                "generated_at": {"type": "string", "format": "date-time"},
+                "name": {"type": "string"},
+                "schema": {"type": "object"}
+            }),
+        ),
         "capabilities.v1" | "campus-lms.capabilities.v1" => static_schema(
             "campus-lms.capabilities.v1",
             &[
@@ -152,12 +163,21 @@ fn show(name: &str) -> crate::error::Result<()> {
         "uninstall.v1" | "campus-lms.uninstall.v1" => lifecycle_schema("campus-lms.uninstall.v1"),
         _ => {
             return Err(CampusError::NotFound {
-                message: format!("schema {name} is not implemented yet"),
+                message: format!("unknown schema: {name}"),
                 json: true,
             })
         }
     };
-    output::print_json(&schema)
+    output::print_json(&json!({
+        "schema_version": "campus-lms.schema_show.v1",
+        "generated_at": output::generated_at(),
+        "name": canonical_name(name),
+        "schema": schema
+    }))
+}
+
+fn canonical_name(name: &str) -> String {
+    name.strip_prefix("campus-lms.").unwrap_or(name).to_string()
 }
 
 fn generated_schema<T: JsonSchema>(id: &str) -> crate::error::Result<Value> {

@@ -2,6 +2,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Warning {
@@ -38,6 +39,53 @@ impl Warning {
             item: warning.item.clone(),
             itemid: warning.itemid,
         }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct WarningSummary {
+    #[schemars(regex(pattern = "^[A-Z0-9_]+$"))]
+    pub code: String,
+    pub count: usize,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WarningReport {
+    pub summary: Vec<WarningSummary>,
+    pub details: Vec<Warning>,
+    pub details_truncated: bool,
+}
+
+pub fn warning_report(warnings: Vec<Warning>) -> WarningReport {
+    let mut groups: BTreeMap<(String, String, Option<String>), usize> = BTreeMap::new();
+    for warning in &warnings {
+        *groups
+            .entry((
+                warning.code.clone(),
+                warning.message.clone(),
+                warning.hint.clone(),
+            ))
+            .or_default() += 1;
+    }
+    let summary = groups
+        .into_iter()
+        .map(|((code, message, hint), count)| WarningSummary {
+            code,
+            count,
+            message,
+            hint,
+        })
+        .collect();
+    let detail_limit = 20;
+    let details_truncated = warnings.len() > detail_limit;
+    let details = warnings.into_iter().take(detail_limit).collect();
+    WarningReport {
+        summary,
+        details,
+        details_truncated,
     }
 }
 
@@ -117,6 +165,8 @@ pub struct AuthStatusOutput {
     pub credential_target: Option<crate::keychain::CredentialTarget>,
     pub token_available: bool,
     pub token_readable: bool,
+    #[schemars(regex(pattern = "^(verified|failed|not_requested|not_checked)$"))]
+    pub live_status: String,
     pub live_ok: Option<bool>,
     pub warnings: Vec<Warning>,
     pub next_steps: Vec<String>,
@@ -173,6 +223,8 @@ pub struct AuthVerifyOutput {
     pub backend_roundtrip_ok: bool,
     pub token_available: bool,
     pub token_readable: bool,
+    #[schemars(regex(pattern = "^(verified|failed|not_requested|not_checked)$"))]
+    pub live_status: String,
     pub live_ok: Option<bool>,
     pub warnings: Vec<Warning>,
     pub next_steps: Vec<String>,
@@ -230,6 +282,8 @@ pub struct TodoItem {
         pattern = "^(pending|submitted|completed_or_not_actionable|unknown|new|draft|reopened)$"
     ))]
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
     #[schemars(regex(pattern = "^(calendar_action|assignment_fallback|submission_status)$"))]
     pub status_source: String,
     #[schemars(regex(pattern = "^(overdue|high|medium|low|unknown)$"))]
@@ -244,7 +298,10 @@ pub struct TodoOutput {
     pub generated_at: String,
     pub range: DateRange,
     pub cache: CacheMeta,
+    pub total_items_before_limit: usize,
     pub items: Vec<TodoItem>,
+    pub warnings_summary: Vec<WarningSummary>,
+    pub warnings_details_truncated: bool,
     pub warnings: Vec<Warning>,
 }
 
@@ -294,6 +351,8 @@ pub struct AssignmentOutput {
     pub schema_version: &'static str,
     pub generated_at: String,
     pub assignment: AssignmentDetailOutput,
+    pub warnings_summary: Vec<WarningSummary>,
+    pub warnings_details_truncated: bool,
     pub warnings: Vec<Warning>,
 }
 
@@ -306,6 +365,8 @@ pub struct PrivacyOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SummaryOutput {
+    pub returned_count: usize,
+    pub total_matching_count: usize,
     pub pending_count: usize,
     pub overdue_count: usize,
     pub due_within_48h_count: usize,
@@ -328,6 +389,9 @@ pub struct AiSnapshotOutput {
     pub courses: Vec<SnapshotCourse>,
     pub courses_in_pending_tasks: Vec<SnapshotCourse>,
     pub pending_tasks: Vec<TodoItem>,
+    pub unsupported_flags: Vec<String>,
+    pub warnings_summary: Vec<WarningSummary>,
+    pub warnings_details_truncated: bool,
     pub warnings: Vec<Warning>,
 }
 
@@ -384,6 +448,8 @@ mod tests {
                 timezone: "UTC".to_string(),
             },
             summary: SummaryOutput {
+                returned_count: 1,
+                total_matching_count: 1,
                 pending_count: 1,
                 overdue_count: 0,
                 due_within_48h_count: 1,
@@ -405,11 +471,15 @@ mod tests {
                 due_at: Some("2026-05-09T00:00:00Z".to_string()),
                 due_in_seconds: Some(86_400),
                 status: "pending".to_string(),
+                status_reason: Some("submission status indicates this task is pending".to_string()),
                 status_source: "submission_status".to_string(),
                 priority_hint: "high".to_string(),
                 url: None,
                 detail_command: Some("campus-lms assignment show assign:100 --json".to_string()),
             }],
+            unsupported_flags: Vec::new(),
+            warnings_summary: Vec::new(),
+            warnings_details_truncated: false,
             warnings: Vec::new(),
         };
 
@@ -429,6 +499,8 @@ mod tests {
                     "timezone": "UTC"
                 },
                 "summary": {
+                    "returned_count": 1,
+                    "total_matching_count": 1,
                     "pending_count": 1,
                     "overdue_count": 0,
                     "due_within_48h_count": 1
@@ -449,12 +521,16 @@ mod tests {
                         "due_at": "2026-05-09T00:00:00Z",
                         "due_in_seconds": 86400,
                         "status": "pending",
+                        "status_reason": "submission status indicates this task is pending",
                         "status_source": "submission_status",
                         "priority_hint": "high",
                         "url": null,
                         "detail_command": "campus-lms assignment show assign:100 --json"
                     }
                 ],
+                "unsupported_flags": [],
+                "warnings_summary": [],
+                "warnings_details_truncated": false,
                 "warnings": []
             })
         );
@@ -467,5 +543,21 @@ mod tests {
             "COURSE_NOT_VISIBLE"
         );
         assert_eq!(normalize_warning_code(Some("  ")), "MOODLE_WARNING");
+    }
+
+    #[test]
+    fn warning_report_aggregates_repeated_warnings() {
+        let warnings = vec![
+            Warning::new("NO_ACCESS", "No access rights in module context", None),
+            Warning::new("NO_ACCESS", "No access rights in module context", None),
+            Warning::new("OTHER", "Different", Some("Check permissions".to_string())),
+        ];
+        let report = warning_report(warnings);
+        assert_eq!(report.summary.len(), 2);
+        assert!(report.summary.iter().any(|item| item.code == "NO_ACCESS"
+            && item.count == 2
+            && item.message == "No access rights in module context"));
+        assert_eq!(report.details.len(), 3);
+        assert!(!report.details_truncated);
     }
 }

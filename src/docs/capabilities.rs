@@ -9,14 +9,14 @@ pub fn print() -> crate::error::Result<()> {
         "commands": [
             {
                 "name": "auth login",
-                "read_only": true,
+                "read_only": false,
                 "safe_for_ai": false,
                 "description": "Request a Moodle Web Services token and verify OS credential-store persistence.",
                 "example": "campus-lms auth login --base-url https://lms.example.edu/ --username student123 --password-stdin --json"
             },
             {
                 "name": "auth import-token",
-                "read_only": true,
+                "read_only": false,
                 "safe_for_ai": false,
                 "description": "Store an administrator-issued Moodle Web Services token for SSO/MFA environments.",
                 "example": "campus-lms auth import-token --base-url https://lms.example.edu/ --username student123 --token-stdin --json"
