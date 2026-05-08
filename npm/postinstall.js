@@ -4,7 +4,8 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
-const { artifactName, executableName, packagePlatform } = require("./platform");
+const crypto = require("node:crypto");
+const { artifactName, checksumArtifactName, executableName, packagePlatform } = require("./platform");
 
 if (process.env.CAMPUS_LMS_SKIP_DOWNLOAD === "1") {
   console.log("Skipping campus-lms binary install because CAMPUS_LMS_SKIP_DOWNLOAD=1.");
@@ -55,6 +56,7 @@ installDownloadedBinary()
 
 async function installDownloadedBinary() {
   const name = artifactName(pkg.version);
+  const checksumName = checksumArtifactName(pkg.version);
   if (!name) {
     return false;
   }
@@ -63,9 +65,18 @@ async function installDownloadedBinary() {
     return false;
   }
 
-  const url = `${baseUrl.replace(/\/$/, "")}/${name}`;
+  const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+  const url = `${normalizedBaseUrl}/${name}`;
+  const checksumUrl = `${normalizedBaseUrl}/${checksumName}`;
+  const checksumTarget = `${installedBinary}.sha256`;
   fs.mkdirSync(path.dirname(installedBinary), { recursive: true });
-  await download(url, installedBinary);
+  try {
+    await download(checksumUrl, checksumTarget);
+    await download(url, installedBinary);
+    verifyChecksum(installedBinary, checksumTarget, name);
+  } finally {
+    fs.rmSync(checksumTarget, { force: true });
+  }
   markExecutable(installedBinary);
   return true;
 }
@@ -165,6 +176,40 @@ function download(url, target) {
     );
     request.on("error", reject);
   });
+}
+
+function verifyChecksum(file, checksumFile, artifact) {
+  const checksumText = fs.readFileSync(checksumFile, "utf8").trim();
+  const expected = parseChecksum(checksumText, artifact);
+  const actual = sha256(file);
+
+  if (actual !== expected) {
+    fs.rmSync(file, { force: true });
+    throw new Error(
+      `Checksum verification failed for ${artifact}. Expected ${expected}, got ${actual}.`
+    );
+  }
+}
+
+function parseChecksum(text, artifact) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const match = line.match(/^([a-fA-F0-9]{64})(?:\s+\*?(.+))?$/);
+    if (!match) {
+      continue;
+    }
+    const fileName = match[2] ? path.basename(match[2].trim()) : null;
+    if (!fileName || fileName === artifact) {
+      return match[1].toLowerCase();
+    }
+  }
+  throw new Error(`No SHA256 checksum for ${artifact} was found.`);
+}
+
+function sha256(file) {
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(file));
+  return hash.digest("hex");
 }
 
 function markExecutable(file) {

@@ -48,6 +48,13 @@ campus-lms-v<version>-linux-x64
 campus-lms-v<version>-linux-arm64
 ```
 
+各 binary と同じ場所に SHA256 sidecar も置きます。`postinstall` は binary をインストールする前に checksum を検証し、不一致ならインストールを失敗させます。
+
+```text
+campus-lms-v<version>-windows-x64.exe.sha256
+campus-lms-v<version>-macos-arm64.sha256
+```
+
 開発者向けにソースからビルドしたい場合だけ、`CAMPUS_LMS_BUILD_FROM_SOURCE=1` を指定します。外部バイナリを直接指定する場合は `CAMPUS_LMS_BIN` を使えます。
 
 配布イメージや CI の成果物を使う場合は、README 配布手順に従ってください。

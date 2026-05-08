@@ -38,8 +38,14 @@ function artifactName(version) {
   return `campus-lms-v${version}-${platform}${ext}`;
 }
 
+function checksumArtifactName(version) {
+  const artifact = artifactName(version);
+  return artifact ? `${artifact}.sha256` : null;
+}
+
 module.exports = {
   artifactName,
+  checksumArtifactName,
   executableName,
   packagePlatform
 };

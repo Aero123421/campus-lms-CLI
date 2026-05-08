@@ -64,11 +64,14 @@ jobs:
         run: |
           mkdir -p dist
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/release/${{ matrix.binary_name }}" "dist/campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}.exe"
+            artifact="campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}.exe"
+            cp "target/release/${{ matrix.binary_name }}" "dist/${artifact}"
           else
-            cp "target/release/${{ matrix.binary_name }}" "dist/campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}"
-            chmod +x "dist/campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}"
+            artifact="campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}"
+            cp "target/release/${{ matrix.binary_name }}" "dist/${artifact}"
+            chmod +x "dist/${artifact}"
           fi
+          node npm/sha256-file.js "dist/${artifact}" > "dist/${artifact}.sha256"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
