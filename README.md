@@ -17,9 +17,17 @@
 GitHub から直接インストールできます。
 
 ```bash
-npm install -g github:Aero123421/campus-lms-CLI
+npm install -g --install-links=true github:Aero123421/campus-lms-CLI
 campus-lms init
 campus-lms auth status --json
+```
+
+`npm install -g github:...` が `npm/postinstall.js` を見つけられず失敗する環境では、npm の GitHub global install のリンク方式が原因です。上の `--install-links=true` 付きコマンドを使ってください。
+
+それでも失敗する場合は、GitHub の tarball URL から直接インストールできます。
+
+```bash
+npm install -g https://github.com/Aero123421/campus-lms-CLI/archive/refs/heads/main.tar.gz
 ```
 
 リポジトリを clone して試す場合は以下です。
@@ -36,7 +44,7 @@ npx campus-lms capabilities
 ### アップデート
 
 ```bash
-npm install -g github:Aero123421/campus-lms-CLI
+npm install -g --install-links=true github:Aero123421/campus-lms-CLI
 ```
 
 ### アンインストール
