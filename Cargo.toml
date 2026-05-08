@@ -1,0 +1,30 @@
+[package]
+name = "campus-lms-cli"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "A read-only CLI integration for Moodle-compatible university LMS sites."
+
+[[bin]]
+name = "campus-lms"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+html2text = "0.12"
+keyring = "3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rpassword = "7"
+scraper = "0.19"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+toml = "0.8"
+url = { version = "2", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"

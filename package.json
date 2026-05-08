@@ -1,0 +1,34 @@
+{
+  "name": "campus-lms-cli",
+  "version": "0.1.0",
+  "description": "A read-only CLI integration for Moodle-compatible university LMS sites.",
+  "license": "Apache-2.0",
+  "bin": {
+    "campus-lms": "npm/campus-lms.js"
+  },
+  "scripts": {
+    "build:native": "node npm/cargo.js build --release",
+    "prepare:prebuilt": "node npm/prepare-prebuilt.js",
+    "postinstall": "node npm/postinstall.js",
+    "test": "node npm/cargo.js test"
+  },
+  "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "npm/*.js",
+    "npm/prebuilt",
+    "src"
+  ],
+  "keywords": [
+    "cli",
+    "moodle",
+    "lms",
+    "campus",
+    "rust"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
