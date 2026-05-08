@@ -13,6 +13,7 @@
   "scripts": {
     "build:native": "node npm/cargo.js build --release",
     "prepare:prebuilt": "node npm/prepare-prebuilt.js",
+    "prepare": "node -e \"\"",
     "postinstall": "node npm/postinstall.js",
     "test": "node npm/cargo.js test"
   },
