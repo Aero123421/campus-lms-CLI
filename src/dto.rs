@@ -2,12 +2,14 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Warning {
     #[schemars(regex(pattern = "^[A-Z0-9_]+$"))]
     pub code: String,
+    #[schemars(regex(pattern = "^(info|warning|error)$"))]
+    pub severity: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
@@ -21,6 +23,7 @@ impl Warning {
     pub fn new(code: impl Into<String>, message: impl Into<String>, hint: Option<String>) -> Self {
         Self {
             code: code.into(),
+            severity: "warning".to_string(),
             message: message.into(),
             hint,
             item: None,
@@ -33,10 +36,25 @@ impl Warning {
             .message
             .clone()
             .unwrap_or_else(|| "Moodle returned a warning without a message.".to_string());
+        let code = stable_warning_code(warning.warningcode.as_deref(), &message);
+        let access_denied_module = code == "ACCESS_DENIED_IN_MODULE_CONTEXT";
         Self {
-            code: stable_warning_code(warning.warningcode.as_deref(), &message),
-            message,
-            hint: Some("The LMS may have returned partial results.".to_string()),
+            code,
+            severity: if access_denied_module {
+                "info".to_string()
+            } else {
+                "warning".to_string()
+            },
+            message: if access_denied_module {
+                "Moodle returned warnings for hidden or restricted modules.".to_string()
+            } else {
+                message
+            },
+            hint: Some(if access_denied_module {
+                "Visible assignments were still returned. These module IDs were not found in visible assignment data and are usually hidden, restricted, or unavailable Moodle modules.".to_string()
+            } else {
+                "The LMS may have returned partial results.".to_string()
+            }),
             item: warning.item.clone(),
             itemid: warning.itemid,
         }
@@ -47,10 +65,18 @@ impl Warning {
 pub struct WarningSummary {
     #[schemars(regex(pattern = "^[A-Z0-9_]+$"))]
     pub code: String,
+    #[schemars(regex(pattern = "^(info|warning|error)$"))]
+    pub severity: String,
     pub count: usize,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpretation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected_visible_items_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden_or_restricted_module_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,37 +88,78 @@ pub struct WarningReport {
     pub details_truncated: bool,
 }
 
+#[cfg(test)]
 pub fn warning_report(warnings: Vec<Warning>) -> WarningReport {
+    warning_report_with_options(warnings, Some(5), &BTreeSet::new())
+}
+
+pub fn warning_report_with_options(
+    warnings: Vec<Warning>,
+    detail_limit: Option<usize>,
+    visible_item_ids: &BTreeSet<i64>,
+) -> WarningReport {
     let total_count = warnings.len();
-    let mut groups: BTreeMap<(String, String, Option<String>), usize> = BTreeMap::new();
+    type WarningGroupKey = (String, String, String, Option<String>);
+    let mut groups: BTreeMap<WarningGroupKey, Vec<Option<i64>>> = BTreeMap::new();
     for warning in &warnings {
-        *groups
+        groups
             .entry((
                 warning.code.clone(),
+                warning.severity.clone(),
                 warning.message.clone(),
                 warning.hint.clone(),
             ))
-            .or_default() += 1;
+            .or_default()
+            .push(warning.itemid);
     }
     let summary = groups
         .into_iter()
-        .map(|((code, message, hint), count)| WarningSummary {
-            code,
-            count,
-            message,
-            hint,
+        .map(|((code, severity, message, hint), itemids)| {
+            let count = itemids.len();
+            let affected_visible_items_count = if code == "ACCESS_DENIED_IN_MODULE_CONTEXT" {
+                Some(
+                    itemids
+                        .iter()
+                        .flatten()
+                        .filter(|itemid| visible_item_ids.contains(itemid))
+                        .count(),
+                )
+            } else {
+                None
+            };
+            WarningSummary {
+                interpretation: access_denied_interpretation(&code),
+                hidden_or_restricted_module_count: affected_visible_items_count
+                    .map(|affected| count.saturating_sub(affected)),
+                affected_visible_items_count,
+                code,
+                severity,
+                count,
+                message,
+                hint,
+            }
         })
         .collect();
-    let detail_limit = 5;
-    let details_truncated = warnings.len() > detail_limit;
-    let details: Vec<Warning> = warnings.into_iter().take(detail_limit).collect();
+    let details: Vec<Warning> = match detail_limit {
+        Some(limit) => warnings.into_iter().take(limit).collect(),
+        None => warnings,
+    };
     let returned_count = details.len();
+    let details_truncated = returned_count < total_count;
     WarningReport {
         summary,
         details,
         total_count,
         returned_count,
         details_truncated,
+    }
+}
+
+fn access_denied_interpretation(code: &str) -> Option<String> {
+    if code == "ACCESS_DENIED_IN_MODULE_CONTEXT" {
+        Some("Moodle reported hidden or restricted module IDs. This usually does not mean visible assignments were missed; visible assignments were still returned. Treat this as informational unless affected_visible_items_count is greater than 0.".to_string())
+    } else {
+        None
     }
 }
 
@@ -403,6 +470,7 @@ pub struct SummaryOutput {
     pub total_matching_count: usize,
     pub limited: bool,
     pub pending_count: usize,
+    pub pending_count_scope: String,
     pub pending_returned_count: usize,
     pub pending_total_matching_count: usize,
     pub overdue_count: usize,
@@ -491,6 +559,7 @@ mod tests {
                 total_matching_count: 1,
                 limited: false,
                 pending_count: 1,
+                pending_count_scope: "returned_items".to_string(),
                 pending_returned_count: 1,
                 pending_total_matching_count: 1,
                 overdue_count: 0,
@@ -547,6 +616,7 @@ mod tests {
                     "total_matching_count": 1,
                     "limited": false,
                     "pending_count": 1,
+                    "pending_count_scope": "returned_items",
                     "pending_returned_count": 1,
                     "pending_total_matching_count": 1,
                     "overdue_count": 0,

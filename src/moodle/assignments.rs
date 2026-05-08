@@ -8,11 +8,11 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::{
     cache,
-    cli::{ensure_cache_flags, ensure_max_chars, AssignmentShowArgs, Cli},
+    cli::{ensure_cache_flags, ensure_max_chars, warning_detail_limit, AssignmentShowArgs, Cli},
     config,
     dto::{
-        warning_report, AssignmentDetailOutput, AssignmentOutput, AssignmentSubmissionOutput,
-        AttachmentOutput, Warning,
+        warning_report_with_options, AssignmentDetailOutput, AssignmentOutput,
+        AssignmentSubmissionOutput, AttachmentOutput, Warning,
     },
     error::CampusError,
     moodle::{
@@ -139,7 +139,12 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
         })
         .collect();
 
-    let report = warning_report(warnings);
+    let detail_limit = warning_detail_limit(cli).map_err(|err| err.with_json(cli.json))?;
+    let visible_item_ids = [item.assignment.id]
+        .into_iter()
+        .chain(item.assignment.cmid)
+        .collect();
+    let report = warning_report_with_options(warnings, detail_limit, &visible_item_ids);
     let value = AssignmentOutput {
         schema_version: "campus-lms.assignment.v1",
         generated_at: output::generated_at(),

@@ -1,6 +1,6 @@
 {
   "name": "campus-lms-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A read-only CLI integration for Moodle-compatible university LMS sites.",
   "license": "Apache-2.0",
   "repository": {

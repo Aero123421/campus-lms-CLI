@@ -45,6 +45,14 @@ pub struct Cli {
     )]
     pub verbose: bool,
 
+    #[arg(
+        long,
+        global = true,
+        value_name = "N|all",
+        help = "Include this many warning detail rows in JSON output; default is 0, --verbose implies all"
+    )]
+    pub warning_details: Option<String>,
+
     #[arg(long, global = true, help = "Reduce human-readable output")]
     pub quiet: bool,
 
@@ -446,5 +454,22 @@ pub fn ensure_max_chars(max_chars: usize) -> crate::error::Result<()> {
             "--max-chars must be 100000 or less.",
             None,
         ))
+    }
+}
+
+pub fn warning_detail_limit(cli: &Cli) -> crate::error::Result<Option<usize>> {
+    match cli.warning_details.as_deref() {
+        Some("all") => Ok(None),
+        Some(value) => {
+            let limit = value.parse::<usize>().map_err(|_| {
+                crate::error::CampusError::invalid_argument(
+                    "--warning-details must be 0, a positive integer, or all.",
+                    Some("Use --warning-details 20 for debugging, or --verbose for all details."),
+                )
+            })?;
+            Ok(Some(limit))
+        }
+        None if cli.verbose => Ok(None),
+        None => Ok(Some(0)),
     }
 }

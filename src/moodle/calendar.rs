@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -7,9 +8,12 @@ use time::{Date, Duration as TimeDuration, OffsetDateTime, UtcOffset};
 
 use crate::{
     cache,
-    cli::{ensure_cache_flags, ensure_days, ensure_max_items, Cli, TodoArgs},
+    cli::{ensure_cache_flags, ensure_days, ensure_max_items, warning_detail_limit, Cli, TodoArgs},
     config,
-    dto::{warning_report, CacheMeta, DateRange, TodoItem, TodoOutput, TodoSummary, Warning},
+    dto::{
+        warning_report_with_options, CacheMeta, DateRange, TodoItem, TodoOutput, TodoSummary,
+        Warning,
+    },
     error::CampusError,
     moodle::{
         api::MoodleApi,
@@ -26,7 +30,15 @@ pub struct TodoPayload {
     pub range_to: String,
     pub items: Vec<TodoItem>,
     pub total_items_before_limit: usize,
+    #[serde(default)]
+    pub visible_warning_item_ids: Vec<i64>,
     pub warnings: Vec<Warning>,
+}
+
+impl TodoPayload {
+    fn visible_item_ids(&self) -> BTreeSet<i64> {
+        self.visible_warning_item_ids.iter().copied().collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +52,10 @@ pub fn todo(cli: &Cli, args: &TodoArgs) -> crate::error::Result<()> {
     ensure_days(args.days).map_err(|err| err.with_json(cli.json))?;
     ensure_max_items(args.max_items).map_err(|err| err.with_json(cli.json))?;
     let fetched = fetch(cli, args).map_err(|err| err.with_json(cli.json))?;
-    let report = warning_report(fetched.payload.warnings);
+    let detail_limit = warning_detail_limit(cli).map_err(|err| err.with_json(cli.json))?;
+    let visible_item_ids = fetched.payload.visible_item_ids();
+    let report =
+        warning_report_with_options(fetched.payload.warnings, detail_limit, &visible_item_ids);
     let returned_count = fetched.payload.items.len();
     let total_matching_count = fetched.payload.total_items_before_limit;
     output::print_json(&TodoOutput {
@@ -90,7 +105,7 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let cache_key = cache::key(
         "todo",
         &format!(
-            "v4:{}:{}:{:?}:{}:{:?}",
+            "v5:{}:{}:{:?}:{}:{:?}",
             namespace, args.days, args.course, args.include_submitted, args.max_items
         ),
     );
@@ -114,6 +129,17 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let mut warnings = Vec::new();
     let command_prefix = command_prefix(cli);
     let assignments = fetch_assignments(cli, args.refresh, args.offline)?;
+    let visible_warning_item_ids = assignments
+        .items
+        .iter()
+        .filter(|item| {
+            args.course
+                .as_deref()
+                .is_none_or(|course| item.course_id == course)
+        })
+        .flat_map(|item| [Some(item.assignment.id), item.assignment.cmid])
+        .flatten()
+        .collect::<Vec<_>>();
     warnings.extend(filter_warnings_for_course(
         assignments.warnings.clone(),
         args.course.as_deref(),
@@ -278,6 +304,7 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
         range_to,
         items,
         total_items_before_limit,
+        visible_warning_item_ids,
         warnings,
     };
     cache::set(&cache_key, &payload)?;

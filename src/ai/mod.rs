@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    cli::{ensure_days, ensure_max_items, AiCommand, Cli, TodoArgs},
+    cli::{ensure_days, ensure_max_items, warning_detail_limit, AiCommand, Cli, TodoArgs},
     config,
     dto::{
-        warning_report, AiSnapshotOutput, DateRange, PrivacyOutput, SnapshotCourse, SummaryOutput,
-        Warning,
+        warning_report_with_options, AiSnapshotOutput, DateRange, PrivacyOutput, SnapshotCourse,
+        SummaryOutput, Warning,
     },
     moodle::calendar,
     output,
@@ -87,7 +87,9 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
     }
 
     let timezone = config.output.timezone.clone();
-    let report = warning_report(warnings);
+    let detail_limit = warning_detail_limit(cli).map_err(|err| err.with_json(cli.json))?;
+    let report =
+        warning_report_with_options(warnings, detail_limit, &std::collections::BTreeSet::new());
     output::print_json(&AiSnapshotOutput {
         schema_version: "campus-lms.ai_snapshot.v1",
         generated_at: output::generated_at(),
@@ -106,6 +108,7 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
             total_matching_count,
             limited: payload.items.len() < total_matching_count,
             pending_count,
+            pending_count_scope: "returned_items".to_string(),
             pending_returned_count: pending_count,
             pending_total_matching_count: total_matching_count,
             overdue_count,
