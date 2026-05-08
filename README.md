@@ -33,21 +33,10 @@ npx campus-lms capabilities
 
 通常の npm install では、同梱済みまたは GitHub Releases の prebuilt binary を使います。利用者側に Rust toolchain は不要です。
 
-### npm package から入れる
-
-npm registry に publish 済みの場合は以下です。
-
-```bash
-npm install -g campus-lms-cli
-campus-lms init
-```
-
 ### アップデート
 
 ```bash
 npm install -g github:Aero123421/campus-lms-CLI
-# npm registry から入れている場合:
-npm install -g campus-lms-cli@latest
 ```
 
 ### アンインストール
