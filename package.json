@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "A read-only CLI integration for Moodle-compatible university LMS sites.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aero123421/campus-lms-CLI.git"
+  },
   "bin": {
     "campus-lms": "npm/campus-lms.js"
   },

@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without leading v, for example 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_suffix: windows-x64
+            binary_name: campus-lms.exe
+          - os: ubuntu-latest
+            artifact_suffix: linux-x64
+            binary_name: campus-lms
+          - os: ubuntu-24.04-arm
+            artifact_suffix: linux-arm64
+            binary_name: campus-lms
+          - os: macos-13
+            artifact_suffix: macos-x64
+            binary_name: campus-lms
+          - os: macos-latest
+            artifact_suffix: macos-arm64
+            binary_name: campus-lms
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/release/${{ matrix.binary_name }}" "dist/campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}.exe"
+          else
+            cp "target/release/${{ matrix.binary_name }}" "dist/campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}"
+            chmod +x "dist/campus-lms-v${{ steps.version.outputs.version }}-${{ matrix.artifact_suffix }}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: campus-lms-${{ matrix.artifact_suffix }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release tag
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+            tag="v${version}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: campus-lms ${{ steps.version.outputs.tag }}
+          files: dist/*
+          generate_release_notes: true
