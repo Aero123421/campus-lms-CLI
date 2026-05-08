@@ -29,12 +29,13 @@ impl Warning {
     }
 
     pub fn from_moodle_warning(warning: &crate::moodle::models::MoodleWarning) -> Self {
+        let message = warning
+            .message
+            .clone()
+            .unwrap_or_else(|| "Moodle returned a warning without a message.".to_string());
         Self {
-            code: normalize_warning_code(warning.warningcode.as_deref()),
-            message: warning
-                .message
-                .clone()
-                .unwrap_or_else(|| "Moodle returned a warning without a message.".to_string()),
+            code: stable_warning_code(warning.warningcode.as_deref(), &message),
+            message,
             hint: Some("The LMS may have returned partial results.".to_string()),
             item: warning.item.clone(),
             itemid: warning.itemid,
@@ -56,10 +57,13 @@ pub struct WarningSummary {
 pub struct WarningReport {
     pub summary: Vec<WarningSummary>,
     pub details: Vec<Warning>,
+    pub total_count: usize,
+    pub returned_count: usize,
     pub details_truncated: bool,
 }
 
 pub fn warning_report(warnings: Vec<Warning>) -> WarningReport {
+    let total_count = warnings.len();
     let mut groups: BTreeMap<(String, String, Option<String>), usize> = BTreeMap::new();
     for warning in &warnings {
         *groups
@@ -79,14 +83,25 @@ pub fn warning_report(warnings: Vec<Warning>) -> WarningReport {
             hint,
         })
         .collect();
-    let detail_limit = 20;
+    let detail_limit = 5;
     let details_truncated = warnings.len() > detail_limit;
-    let details = warnings.into_iter().take(detail_limit).collect();
+    let details: Vec<Warning> = warnings.into_iter().take(detail_limit).collect();
+    let returned_count = details.len();
     WarningReport {
         summary,
         details,
+        total_count,
+        returned_count,
         details_truncated,
     }
+}
+
+fn stable_warning_code(code: Option<&str>, message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("no access rights in module context") {
+        return "ACCESS_DENIED_IN_MODULE_CONTEXT".to_string();
+    }
+    normalize_warning_code(code)
 }
 
 fn normalize_warning_code(code: Option<&str>) -> String {
@@ -167,6 +182,8 @@ pub struct AuthStatusOutput {
     pub token_readable: bool,
     #[schemars(regex(pattern = "^(verified|failed|not_requested|not_checked)$"))]
     pub live_status: String,
+    #[schemars(regex(pattern = "^(ok|failed|not_run|not_checked)$"))]
+    pub live_check: String,
     pub live_ok: Option<bool>,
     pub warnings: Vec<Warning>,
     pub next_steps: Vec<String>,
@@ -221,10 +238,13 @@ pub struct AuthVerifyOutput {
     pub username: Option<String>,
     pub credential_target: Option<crate::keychain::CredentialTarget>,
     pub backend_roundtrip_ok: bool,
+    pub credential_backend_ok: bool,
     pub token_available: bool,
     pub token_readable: bool,
     #[schemars(regex(pattern = "^(verified|failed|not_requested|not_checked)$"))]
     pub live_status: String,
+    #[schemars(regex(pattern = "^(ok|failed|not_run|not_checked)$"))]
+    pub live_check: String,
     pub live_ok: Option<bool>,
     pub warnings: Vec<Warning>,
     pub next_steps: Vec<String>,
@@ -298,11 +318,23 @@ pub struct TodoOutput {
     pub generated_at: String,
     pub range: DateRange,
     pub cache: CacheMeta,
+    pub summary: TodoSummary,
     pub total_items_before_limit: usize,
     pub items: Vec<TodoItem>,
     pub warnings_summary: Vec<WarningSummary>,
+    pub warnings_total_count: usize,
+    pub warnings_returned_count: usize,
     pub warnings_details_truncated: bool,
     pub warnings: Vec<Warning>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct TodoSummary {
+    pub returned_count: usize,
+    pub total_matching_count: usize,
+    pub limited: bool,
+    pub overdue_count: usize,
+    pub due_within_48h_count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -352,6 +384,8 @@ pub struct AssignmentOutput {
     pub generated_at: String,
     pub assignment: AssignmentDetailOutput,
     pub warnings_summary: Vec<WarningSummary>,
+    pub warnings_total_count: usize,
+    pub warnings_returned_count: usize,
     pub warnings_details_truncated: bool,
     pub warnings: Vec<Warning>,
 }
@@ -367,7 +401,10 @@ pub struct PrivacyOutput {
 pub struct SummaryOutput {
     pub returned_count: usize,
     pub total_matching_count: usize,
+    pub limited: bool,
     pub pending_count: usize,
+    pub pending_returned_count: usize,
+    pub pending_total_matching_count: usize,
     pub overdue_count: usize,
     pub due_within_48h_count: usize,
 }
@@ -391,6 +428,8 @@ pub struct AiSnapshotOutput {
     pub pending_tasks: Vec<TodoItem>,
     pub unsupported_flags: Vec<String>,
     pub warnings_summary: Vec<WarningSummary>,
+    pub warnings_total_count: usize,
+    pub warnings_returned_count: usize,
     pub warnings_details_truncated: bool,
     pub warnings: Vec<Warning>,
 }
@@ -450,7 +489,10 @@ mod tests {
             summary: SummaryOutput {
                 returned_count: 1,
                 total_matching_count: 1,
+                limited: false,
                 pending_count: 1,
+                pending_returned_count: 1,
+                pending_total_matching_count: 1,
                 overdue_count: 0,
                 due_within_48h_count: 1,
             },
@@ -479,6 +521,8 @@ mod tests {
             }],
             unsupported_flags: Vec::new(),
             warnings_summary: Vec::new(),
+            warnings_total_count: 0,
+            warnings_returned_count: 0,
             warnings_details_truncated: false,
             warnings: Vec::new(),
         };
@@ -501,7 +545,10 @@ mod tests {
                 "summary": {
                     "returned_count": 1,
                     "total_matching_count": 1,
+                    "limited": false,
                     "pending_count": 1,
+                    "pending_returned_count": 1,
+                    "pending_total_matching_count": 1,
                     "overdue_count": 0,
                     "due_within_48h_count": 1
                 },
@@ -530,6 +577,8 @@ mod tests {
                 ],
                 "unsupported_flags": [],
                 "warnings_summary": [],
+                "warnings_total_count": 0,
+                "warnings_returned_count": 0,
                 "warnings_details_truncated": false,
                 "warnings": []
             })
@@ -558,6 +607,8 @@ mod tests {
             && item.count == 2
             && item.message == "No access rights in module context"));
         assert_eq!(report.details.len(), 3);
+        assert_eq!(report.total_count, 3);
+        assert_eq!(report.returned_count, 3);
         assert!(!report.details_truncated);
     }
 }

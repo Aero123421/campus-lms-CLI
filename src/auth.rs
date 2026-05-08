@@ -295,6 +295,7 @@ pub fn status(cli: &Cli, args: &AuthStatusArgs) -> crate::error::Result<()> {
         credential_target: profile.map(keychain::credential_target),
         token_available,
         token_readable,
+        live_check: live_check(&live_status),
         live_status,
         live_ok,
         warnings,
@@ -409,8 +410,10 @@ pub fn verify(cli: &Cli, args: &AuthVerifyArgs) -> crate::error::Result<()> {
         username: profile.map(|p| p.username.clone()),
         credential_target: profile.map(keychain::credential_target),
         backend_roundtrip_ok,
+        credential_backend_ok: backend_roundtrip_ok,
         token_available,
         token_readable,
+        live_check: live_check(&live_status),
         live_status,
         live_ok,
         warnings,
@@ -514,6 +517,16 @@ fn auth_next_steps(
         "Run: campus-lms doctor --json".to_string(),
         "Run: campus-lms ai snapshot --days 14 --json".to_string(),
     ]
+}
+
+fn live_check(live_status: &str) -> String {
+    match live_status {
+        "verified" => "ok",
+        "failed" => "failed",
+        "not_checked" => "not_checked",
+        _ => "not_run",
+    }
+    .to_string()
 }
 
 fn prompt(label: &str) -> crate::error::Result<String> {

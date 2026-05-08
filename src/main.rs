@@ -15,13 +15,35 @@ mod moodle;
 mod output;
 mod schema;
 
-use clap::Parser;
+use clap::{error::ErrorKind, Parser};
 use cli::{AssignmentCommand, AuthCommand, Cli, Commands};
 use dto::{UserInfo, WhoamiOutput};
 use error::CampusError;
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            if matches!(
+                err.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) {
+                err.exit();
+            }
+            let wants_json = std::env::args_os().any(|arg| arg == "--json");
+            if wants_json {
+                let err = CampusError::invalid_argument(
+                    err.to_string(),
+                    Some("Run the command with --help to see valid arguments."),
+                )
+                .with_json(true);
+                let code = err.exit_code();
+                let _ = output::print_error(&err);
+                std::process::exit(code);
+            }
+            err.exit();
+        }
+    };
     let json = cli.json;
     if let Err(err) = run(cli) {
         let wants_json = json || err.json_requested();

@@ -183,6 +183,8 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
             url: assignment_url,
         },
         warnings_summary: report.summary,
+        warnings_total_count: report.total_count,
+        warnings_returned_count: report.returned_count,
         warnings_details_truncated: report.details_truncated,
         warnings: report.details,
     };

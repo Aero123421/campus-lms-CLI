@@ -104,7 +104,10 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         summary: SummaryOutput {
             returned_count: payload.items.len(),
             total_matching_count,
+            limited: payload.items.len() < total_matching_count,
             pending_count,
+            pending_returned_count: pending_count,
+            pending_total_matching_count: total_matching_count,
             overdue_count,
             due_within_48h_count,
         },
@@ -113,6 +116,8 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         pending_tasks: payload.items,
         unsupported_flags,
         warnings_summary: report.summary,
+        warnings_total_count: report.total_count,
+        warnings_returned_count: report.returned_count,
         warnings_details_truncated: report.details_truncated,
         warnings: report.details,
     })

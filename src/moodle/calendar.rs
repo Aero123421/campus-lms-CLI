@@ -9,11 +9,11 @@ use crate::{
     cache,
     cli::{ensure_cache_flags, ensure_days, ensure_max_items, Cli, TodoArgs},
     config,
-    dto::{warning_report, CacheMeta, DateRange, TodoItem, TodoOutput, Warning},
+    dto::{warning_report, CacheMeta, DateRange, TodoItem, TodoOutput, TodoSummary, Warning},
     error::CampusError,
     moodle::{
         api::MoodleApi,
-        assignments::{fetch_assignments, ts},
+        assignments::{fetch_assignments, ts, AssignmentIndexPayload},
         client::client_from_profile_data,
         models::{ActionEvent, ActionEventsResponse},
     },
@@ -41,6 +41,8 @@ pub fn todo(cli: &Cli, args: &TodoArgs) -> crate::error::Result<()> {
     ensure_max_items(args.max_items).map_err(|err| err.with_json(cli.json))?;
     let fetched = fetch(cli, args).map_err(|err| err.with_json(cli.json))?;
     let report = warning_report(fetched.payload.warnings);
+    let returned_count = fetched.payload.items.len();
+    let total_matching_count = fetched.payload.total_items_before_limit;
     output::print_json(&TodoOutput {
         schema_version: "campus-lms.todo.v1",
         generated_at: output::generated_at(),
@@ -50,9 +52,28 @@ pub fn todo(cli: &Cli, args: &TodoArgs) -> crate::error::Result<()> {
             timezone: configured_timezone(cli),
         },
         cache: fetched.cache,
+        summary: TodoSummary {
+            returned_count,
+            total_matching_count,
+            limited: returned_count < total_matching_count,
+            overdue_count: fetched
+                .payload
+                .items
+                .iter()
+                .filter(|item| item.priority_hint == "overdue")
+                .count(),
+            due_within_48h_count: fetched
+                .payload
+                .items
+                .iter()
+                .filter(|item| item.priority_hint == "high")
+                .count(),
+        },
         total_items_before_limit: fetched.payload.total_items_before_limit,
         items: fetched.payload.items,
         warnings_summary: report.summary,
+        warnings_total_count: report.total_count,
+        warnings_returned_count: report.returned_count,
         warnings_details_truncated: report.details_truncated,
         warnings: report.details,
     })
@@ -69,7 +90,7 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let cache_key = cache::key(
         "todo",
         &format!(
-            "v3:{}:{}:{:?}:{}:{:?}",
+            "v4:{}:{}:{:?}:{}:{:?}",
             namespace, args.days, args.course, args.include_submitted, args.max_items
         ),
     );
@@ -92,61 +113,64 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let mut items = Vec::new();
     let mut warnings = Vec::new();
     let command_prefix = command_prefix(cli);
+    let assignments = fetch_assignments(cli, args.refresh, args.offline)?;
+    warnings.extend(filter_warnings_for_course(
+        assignments.warnings.clone(),
+        args.course.as_deref(),
+    ));
 
     match fetch_action_events(&client, now.unix_timestamp(), to.unix_timestamp()) {
         Ok((events, event_warnings)) => {
             warnings.extend(filter_warnings_for_course(event_warnings, args.course.as_deref()));
             items.extend(events.into_iter().filter_map(|event| {
-            let due = valid_due(event.timesort.or(event.timestart));
-            let course_id = event
-                .course
-                .as_ref()
-                .and_then(|course| course.id)
-                .map(|id| format!("course:{id}"));
-            if let Some(filter) = &args.course {
-                if course_id.as_deref() != Some(filter.as_str()) {
+                let due = valid_due(event.timesort.or(event.timestart));
+                let course_id = event
+                    .course
+                    .as_ref()
+                    .and_then(|course| course.id)
+                    .map(|id| format!("course:{id}"));
+                if let Some(filter) = &args.course {
+                    if course_id.as_deref() != Some(filter.as_str()) {
+                        return None;
+                    }
+                }
+                let item_type = event
+                    .modulename
+                    .clone()
+                    .unwrap_or_else(|| "calendar".to_string());
+                let detail_command =
+                    assignment_id_for_event(&event, due, &assignments).map(|id| {
+                        format!("{command_prefix} assignment show assign:{id} --json")
+                    });
+                let actionable = event.action.as_ref().and_then(|a| a.actionable).unwrap_or(true);
+                if !args.include_submitted && !actionable {
                     return None;
                 }
-            }
-            let item_type = event
-                .modulename
-                .clone()
-                .unwrap_or_else(|| "calendar".to_string());
-            let detail_command = match (event.modulename.as_deref(), event.instance) {
-                (Some("assign"), Some(id)) => {
-                    Some(format!("{command_prefix} assignment show assign:{id} --json"))
-                }
-                _ => None,
-            };
-            let actionable = event.action.as_ref().and_then(|a| a.actionable).unwrap_or(true);
-            if !args.include_submitted && !actionable {
-                return None;
-            }
-            Some(TodoItem {
-                id: format!("calendar:{}", event.id),
-                item_type,
-                course_id,
-                course_name: event
-                    .course
-                    .and_then(|course| course.fullname.or(course.shortname)),
-                title: event.name,
-                due_at: ts(due),
-                due_in_seconds: due.map(|due| due - now.unix_timestamp()),
-                status: if actionable {
-                    "pending".to_string()
-                } else {
-                    "completed_or_not_actionable".to_string()
-                },
-                status_reason: Some(if actionable {
-                    "Moodle calendar action is marked actionable.".to_string()
-                } else {
-                    "Moodle calendar action is marked not actionable.".to_string()
-                }),
-                status_source: "calendar_action".to_string(),
-                priority_hint: priority(due, now.unix_timestamp()),
-                url: event.url,
-                detail_command,
-            })
+                Some(TodoItem {
+                    id: format!("calendar:{}", event.id),
+                    item_type,
+                    course_id,
+                    course_name: event
+                        .course
+                        .and_then(|course| course.fullname.or(course.shortname)),
+                    title: event.name,
+                    due_at: ts(due),
+                    due_in_seconds: due.map(|due| due - now.unix_timestamp()),
+                    status: if actionable {
+                        "pending".to_string()
+                    } else {
+                        "completed_or_not_actionable".to_string()
+                    },
+                    status_reason: Some(if actionable {
+                        "Moodle calendar action is marked actionable.".to_string()
+                    } else {
+                        "Moodle calendar action is marked not actionable.".to_string()
+                    }),
+                    status_source: "calendar_action".to_string(),
+                    priority_hint: priority(due, now.unix_timestamp()),
+                    url: event.url,
+                    detail_command,
+                })
             }));
         }
         Err(err) => warnings.push(Warning::new(
@@ -167,11 +191,6 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
         .map(|id| format!("assign:{id}"))
         .collect::<std::collections::BTreeSet<_>>();
 
-    let assignments = fetch_assignments(cli, args.refresh, args.offline)?;
-    warnings.extend(filter_warnings_for_course(
-        assignments.warnings,
-        args.course.as_deref(),
-    ));
     for item in assignments.items {
         let assignment_id = format!("assign:{}", item.assignment.id);
         if existing_assignment_ids.contains(&assignment_id) {
@@ -319,6 +338,46 @@ fn valid_due(timestamp: Option<i64>) -> Option<i64> {
     timestamp.filter(|timestamp| *timestamp > 0)
 }
 
+fn assignment_id_for_event(
+    event: &ActionEvent,
+    due: Option<i64>,
+    assignments: &AssignmentIndexPayload,
+) -> Option<i64> {
+    if event.modulename.as_deref() != Some("assign") {
+        return None;
+    }
+    if let Some(instance) = event.instance {
+        if let Some(item) = assignments
+            .items
+            .iter()
+            .find(|item| item.assignment.id == instance)
+        {
+            return Some(item.assignment.id);
+        }
+        if let Some(item) = assignments
+            .items
+            .iter()
+            .find(|item| item.assignment.cmid == Some(instance))
+        {
+            return Some(item.assignment.id);
+        }
+    }
+    let course_id = event
+        .course
+        .as_ref()
+        .and_then(|course| course.id)
+        .map(|id| format!("course:{id}"));
+    assignments
+        .items
+        .iter()
+        .find(|item| {
+            course_id.as_deref() == Some(item.course_id.as_str())
+                && event.name.as_deref() == item.assignment.name.as_deref()
+                && valid_due(item.assignment.duedate) == due
+        })
+        .map(|item| item.assignment.id)
+}
+
 fn configured_timezone(cli: &Cli) -> String {
     config::load(cli)
         .ok()
@@ -387,9 +446,12 @@ fn command_prefix(cli: &Cli) -> String {
 mod tests {
     use std::cell::RefCell;
 
-    use crate::moodle::models::{
-        ActionEvent, ActionEventsResponse, AssignmentsResponse, Course, SiteInfo,
-        SubmissionStatusResponse,
+    use crate::moodle::{
+        assignments::AssignmentIndexItem,
+        models::{
+            ActionEvent, ActionEventsResponse, Assignment, AssignmentsResponse, Course, SiteInfo,
+            SubmissionStatusResponse,
+        },
     };
 
     use super::*;
@@ -463,5 +525,47 @@ mod tests {
     fn zero_due_date_is_not_overdue() {
         assert_eq!(valid_due(Some(0)), None);
         assert_eq!(priority(valid_due(Some(0)), 100), "unknown");
+    }
+
+    #[test]
+    fn assignment_event_detail_uses_assignment_id_not_cmid() {
+        let assignments = AssignmentIndexPayload {
+            items: vec![AssignmentIndexItem {
+                course_id: "course:10".to_string(),
+                course_name: Some("Course".to_string()),
+                assignment: Assignment {
+                    id: 123,
+                    cmid: Some(999),
+                    course: Some(10),
+                    name: Some("Report".to_string()),
+                    intro: None,
+                    duedate: Some(1_800),
+                    allowsubmissionsfromdate: None,
+                    cutoffdate: None,
+                    introattachments: Vec::new(),
+                },
+            }],
+            warnings: Vec::new(),
+        };
+        let event = ActionEvent {
+            id: 1,
+            name: Some("Report".to_string()),
+            description: None,
+            timestart: None,
+            timesort: Some(1_800),
+            course: Some(crate::moodle::models::CourseSummary {
+                id: Some(10),
+                fullname: Some("Course".to_string()),
+                shortname: None,
+            }),
+            modulename: Some("assign".to_string()),
+            instance: Some(999),
+            url: None,
+            action: None,
+        };
+        assert_eq!(
+            assignment_id_for_event(&event, Some(1_800), &assignments),
+            Some(123)
+        );
     }
 }

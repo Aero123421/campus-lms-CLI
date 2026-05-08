@@ -221,7 +221,7 @@ JSON は UTF-8 で出力します。日本語のコース名や課題名も JSON
 
 `todo` と `ai snapshot` は `--max-items` で返却件数を制限できます。`summary.returned_count` は実際に返した件数、`summary.total_matching_count` や `total_items_before_limit` は制限前の件数です。
 
-警告が多い Moodle サイトでは、`warnings_summary` に同種警告を集約し、`warnings` には先頭の詳細だけを入れます。詳細が省略された場合は `warnings_details_truncated: true` になります。
+警告が多い Moodle サイトでは、`warnings_summary` に同種警告を集約し、`warnings` には先頭の詳細だけを入れます。`warnings_total_count` と `warnings_returned_count` で件数を確認でき、詳細が省略された場合は `warnings_details_truncated: true` になります。
 
 ## 倫理・セキュリティ
 
