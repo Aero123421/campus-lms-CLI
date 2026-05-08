@@ -1,0 +1,9 @@
+target/
+node_modules/
+npm/bin/
+.github/
+.gitignore
+AGENTS.md
+campus-lms-cli_spec.md
+deny.toml
+*.tgz
