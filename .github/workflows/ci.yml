@@ -21,6 +21,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install Linux credential-store build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Install Rust audit tools
         run: cargo install cargo-audit cargo-deny cargo-machete --locked
 
@@ -54,6 +58,10 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux credential-store build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Setup Node
         uses: actions/setup-node@v6
