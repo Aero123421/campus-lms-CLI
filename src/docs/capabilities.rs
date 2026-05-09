@@ -40,14 +40,22 @@ pub fn print() -> crate::error::Result<()> {
                 "read_only": true,
                 "safe_for_ai": true,
                 "description": "Return a compact overview of upcoming Moodle tasks. Fallback submission-status checks are capped to reduce LMS load.",
-                "example": "campus-lms ai snapshot --days 14 --json"
+                "example": "campus-lms ai snapshot --days 14 --json",
+                "ai_safety_notes": [
+                    "Includes cache metadata so agents can tell whether the snapshot came from cache.",
+                    "Reserved grade and feedback flags are reported as unsupported in this version."
+                ]
             },
             {
                 "name": "assignment show",
                 "read_only": true,
                 "safe_for_ai": true,
                 "description": "Show assignment details without submitting or changing completion state. Use --no-cache for sensitive one-off detail reads.",
-                "example": "campus-lms assignment show assign:12345 --no-cache --json"
+                "example": "campus-lms assignment show assign:12345 --no-cache --json",
+                "ai_safety_notes": [
+                    "--include-html may expose raw LMS HTML and should be avoided unless explicitly needed.",
+                    "Use --max-chars for large descriptions and prefer the detail_command returned by todo or ai snapshot."
+                ]
             },
             {
                 "name": "courses",
@@ -61,7 +69,11 @@ pub fn print() -> crate::error::Result<()> {
                 "read_only": true,
                 "safe_for_ai": true,
                 "description": "List upcoming LMS tasks. Use --status-check-limit or --no-submission-status-check to control fallback API load.",
-                "example": "campus-lms todo --days 14 --status-check-limit 20 --json"
+                "example": "campus-lms todo --days 14 --status-check-limit 20 --json",
+                "ai_safety_notes": [
+                    "Undated fallback assignments are excluded by default; use --include-undated only when needed.",
+                    "Use --warning-details for debugging; normal AI flows should rely on warnings_summary."
+                ]
             },
             {
                 "name": "doctor",

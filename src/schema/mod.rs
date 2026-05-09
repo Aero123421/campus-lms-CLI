@@ -15,8 +15,8 @@ use crate::{
 };
 
 const SCHEMAS: &[&str] = &[
-    "auth_login.v1",
-    "auth_import_token.v1",
+    "auth_login.v2",
+    "auth_import_token.v2",
     "auth_logout.v1",
     "auth_status.v1",
     "auth_verify.v1",
@@ -24,8 +24,8 @@ const SCHEMAS: &[&str] = &[
     "doctor.v1",
     "courses.v1",
     "todo.v1",
-    "assignment.v1",
-    "ai_snapshot.v1",
+    "assignment.v2",
+    "ai_snapshot.v2",
     "schema_list.v1",
     "schema_show.v1",
     "capabilities.v1",
@@ -50,11 +50,11 @@ pub fn run(command: &SchemaCommand) -> crate::error::Result<()> {
 
 fn show(name: &str) -> crate::error::Result<()> {
     let schema = match name {
-        "auth_login.v1" | "campus-lms.auth_login.v1" => {
-            generated_schema::<AuthLoginOutput>("campus-lms.auth_login.v1")?
+        "auth_login.v2" | "campus-lms.auth_login.v2" => {
+            generated_schema::<AuthLoginOutput>("campus-lms.auth_login.v2")?
         }
-        "auth_import_token.v1" | "campus-lms.auth_import_token.v1" => {
-            generated_schema::<AuthImportTokenOutput>("campus-lms.auth_import_token.v1")?
+        "auth_import_token.v2" | "campus-lms.auth_import_token.v2" => {
+            generated_schema::<AuthImportTokenOutput>("campus-lms.auth_import_token.v2")?
         }
         "auth_logout.v1" | "campus-lms.auth_logout.v1" => {
             generated_schema::<AuthLogoutOutput>("campus-lms.auth_logout.v1")?
@@ -75,11 +75,11 @@ fn show(name: &str) -> crate::error::Result<()> {
             generated_schema::<CoursesOutput>("campus-lms.courses.v1")?
         }
         "todo.v1" | "campus-lms.todo.v1" => generated_schema::<TodoOutput>("campus-lms.todo.v1")?,
-        "assignment.v1" | "campus-lms.assignment.v1" => {
-            generated_schema::<AssignmentOutput>("campus-lms.assignment.v1")?
+        "assignment.v2" | "campus-lms.assignment.v2" => {
+            generated_schema::<AssignmentOutput>("campus-lms.assignment.v2")?
         }
-        "ai_snapshot.v1" | "campus-lms.ai_snapshot.v1" => {
-            generated_schema::<AiSnapshotOutput>("campus-lms.ai_snapshot.v1")?
+        "ai_snapshot.v2" | "campus-lms.ai_snapshot.v2" => {
+            generated_schema::<AiSnapshotOutput>("campus-lms.ai_snapshot.v2")?
         }
         "schema_list.v1" | "campus-lms.schema_list.v1" => {
             generated_schema::<SchemaListOutput>("campus-lms.schema_list.v1")?

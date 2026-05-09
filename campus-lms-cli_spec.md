@@ -1,11 +1,11 @@
 # campus-lms-cli 仕様書
 
-Version: 0.1.0-draft  
-Last updated: 2026-05-08  
-Primary language: Rust  
-Target OS: Windows / macOS / Linux  
-License recommendation: Apache-2.0  
-Status: MVP implementation ready
+Version: 0.1.4-draft
+Last updated: 2026-05-09
+Primary language: Rust
+Target OS: Windows / macOS / Linux
+License recommendation: Apache-2.0
+Status: MVP implementation in progress
 
 ---
 
@@ -359,10 +359,12 @@ token
 保存キー:
 
 ```text
-service = campus-lms:<base_url>
+service = campus-lms:<base_url>:<service>
 account = <username>
 secret  = <token>
 ```
+
+古いバージョンの `campus-lms:<base_url>` target がある場合は、新しい target へ移行してから利用する。
 
 #### config.toml
 
@@ -370,7 +372,7 @@ secret  = <token>
 
 ```toml
 [profile.default]
-base_url = "https://lms.example.ac.jp"
+base_url = "https://lms.example.ac.jp/"
 username = "student@example.ac.jp"
 service = "moodle_mobile_app"
 cache_ttl_seconds = 300
@@ -402,6 +404,8 @@ MVP では password 保存を実装しない。
 ### 8.5 HTTPS 強制
 
 `auth login` は原則として HTTPS の `base_url` のみ許可する。
+config.toml を手動編集した場合も同じ制約を検証する。
+サブディレクトリ配下の Moodle を正しく扱うため、`base_url` は末尾 `/` 付きに正規化または手動設定する。
 
 例外:
 
@@ -414,6 +418,7 @@ campus-lms auth login --allow-insecure-localhost
 ```text
 http://localhost
 http://127.0.0.1
+http://[::1]
 ```
 
 ---
@@ -436,11 +441,12 @@ Rust では `directories` crate を使い、OS ごとの標準パスに保存す
 active_profile = "default"
 
 [profile.default]
-base_url = "https://lms.example.ac.jp"
+base_url = "https://lms.example.ac.jp/"
 username = "student@example.ac.jp"
 service = "moodle_mobile_app"
 cache_ttl_seconds = 300
 cache_retention_seconds = 2592000
+allow_insecure_localhost = false
 
 [privacy]
 include_grades_in_ai_snapshot = false
@@ -641,6 +647,9 @@ campus-lms todo --days 14 --json
 | `--offline` | キャッシュのみ |
 | `--include-submitted` | 提出済みも含める |
 | `--course <COURSE_ID>` | コースで絞る |
+| `--status-check-limit <N>` | fallback 課題の提出状態確認APIの上限。default: 20 |
+| `--no-submission-status-check` | fallback 課題の提出状態確認APIを呼ばない |
+| `--include-undated` | 締切なし fallback 課題も含める |
 
 JSON 例:
 
@@ -656,7 +665,16 @@ JSON 例:
   "cache": {
     "used": false,
     "fetched_at": "2026-05-08T10:30:00+09:00",
+    "age_seconds": null,
+    "stale": false,
     "ttl_seconds": 300
+  },
+  "summary": {
+    "returned_count": 1,
+    "total_matching_count": 1,
+    "limited": false,
+    "overdue_count": 0,
+    "due_within_48h_count": 0
   },
   "items": [
     {
@@ -665,7 +683,7 @@ JSON 例:
       "course_id": "course:101",
       "course_name": "情報理論",
       "title": "レポート2",
-      "due_at": "2026-05-12T23:59:00+09:00",
+      "due_at": "2026-05-12T14:59:00Z",
       "due_in_seconds": 393540,
       "status": "not_submitted",
       "priority_hint": "high",
@@ -673,7 +691,11 @@ JSON 例:
       "detail_command": "campus-lms assignment show assign:12345 --json"
     }
   ],
-  "warnings": []
+  "warnings_summary": [],
+  "warnings": [],
+  "warnings_total_count": 0,
+  "warnings_returned_count": 0,
+  "warnings_details_truncated": false
 }
 ```
 
@@ -702,8 +724,15 @@ JSON 例:
 
 ```json
 {
-  "schema_version": "campus-lms.assignment.v1",
+  "schema_version": "campus-lms.assignment.v2",
   "generated_at": "2026-05-08T10:30:00+09:00",
+  "cache": {
+    "used": false,
+    "fetched_at": "2026-05-08T10:30:00+09:00",
+    "age_seconds": null,
+    "stale": false,
+    "ttl_seconds": 300
+  },
   "assignment": {
     "id": "assign:12345",
     "moodle_id": 12345,
@@ -711,8 +740,8 @@ JSON 例:
     "course_id": "course:101",
     "course_name": "情報理論",
     "title": "レポート2",
-    "due_at": "2026-05-12T23:59:00+09:00",
-    "allows_submission_from": "2026-05-01T00:00:00+09:00",
+    "due_at": "2026-05-12T14:59:00Z",
+    "allows_submission_from": "2026-04-30T15:00:00Z",
     "cutoff_at": null,
     "description_text": "レポート2では...",
     "description_truncated": false,
@@ -725,7 +754,7 @@ JSON 例:
         "mime_type": "application/pdf",
         "size_bytes": 204812,
         "download_url_available": true,
-        "download_command": "campus-lms file download file:sha256:abc123 --out report2.pdf"
+        "download_command": null
       }
     ],
     "submission": {
@@ -735,6 +764,7 @@ JSON 例:
     },
     "url": "https://lms.example.ac.jp/mod/assign/view.php?id=12345"
   },
+  "warnings_summary": [],
   "warnings": []
 }
 ```
@@ -766,8 +796,15 @@ JSON 例:
 
 ```json
 {
-  "schema_version": "campus-lms.ai_snapshot.v1",
+  "schema_version": "campus-lms.ai_snapshot.v2",
   "generated_at": "2026-05-08T10:30:00+09:00",
+  "cache": {
+    "used": false,
+    "fetched_at": "2026-05-08T10:30:00+09:00",
+    "age_seconds": null,
+    "stale": false,
+    "ttl_seconds": 300
+  },
   "privacy": {
     "grades_included": false,
     "feedback_included": false,
@@ -779,7 +816,10 @@ JSON 例:
     "timezone": "Asia/Tokyo"
   },
   "summary": {
-    "pending_count": 3,
+    "pending_count_scope": "returned_items",
+    "pending_returned_count": 3,
+    "pending_total_matching_count": 3,
+    "limited": false,
     "overdue_count": 0,
     "due_within_48h_count": 1
   },
@@ -796,14 +836,18 @@ JSON 例:
       "course_id": "course:101",
       "course_name": "情報理論",
       "title": "レポート2",
-      "due_at": "2026-05-12T23:59:00+09:00",
+      "due_at": "2026-05-12T14:59:00Z",
       "due_in_seconds": 393540,
       "status": "not_submitted",
       "priority_hint": "high",
       "detail_command": "campus-lms assignment show assign:12345 --json"
     }
   ],
-  "warnings": []
+  "warnings_summary": [],
+  "warnings": [],
+  "warnings_total_count": 0,
+  "warnings_returned_count": 0,
+  "warnings_details_truncated": false
 }
 ```
 
@@ -847,7 +891,7 @@ JSON 例:
 
 ```bash
 campus-lms schema list --json
-campus-lms schema show ai_snapshot.v1
+campus-lms schema show ai_snapshot.v2
 ```
 
 説明:
@@ -930,7 +974,6 @@ campus-lms file download file:sha256:abc123 --out report2.pdf
 campus-lms cache clear
 campus-lms cache status --json
 campus-lms privacy report --json
-campus-lms doctor --json
 campus-lms completions bash
 campus-lms completions zsh
 campus-lms completions fish
@@ -961,6 +1004,8 @@ campus-lms completions powershell
   "warnings": []
 }
 ```
+
+破壊的な形状変更を入れる場合は、`campus-lms.<name>.v2` のように schema version を上げる。古い v1 schema は互換確認用に残してもよいが、実出力が v2 なら capabilities / README / spec は v2 を案内する。
 
 ### 13.3 warning 型
 
@@ -993,10 +1038,12 @@ Unix timestamp は出力しない。
 
 ```json
 {
-  "due_at": "2026-05-12T23:59:00+09:00",
+  "due_at": "2026-05-12T14:59:00Z",
   "due_in_seconds": 393540
 }
 ```
+
+個別時刻は UTC の RFC3339 を基本にする。`range.timezone` は日付範囲を計算したタイムゾーンを示す。
 
 ### 13.6 HTML 取り扱い
 

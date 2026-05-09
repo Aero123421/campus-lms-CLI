@@ -92,6 +92,10 @@ pub struct MoodleFile {
     #[serde(default)]
     pub filepath: Option<String>,
     #[serde(default)]
+    pub contenthash: Option<String>,
+    #[serde(default)]
+    pub pathnamehash: Option<String>,
+    #[serde(default)]
     pub filesize: Option<i64>,
     #[serde(default)]
     pub mimetype: Option<String>,

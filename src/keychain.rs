@@ -4,13 +4,21 @@ use keyring::Entry;
 
 use crate::{config::Profile, error::CampusError};
 
-pub fn service_name(base_url: &url::Url) -> String {
+pub fn legacy_service_name(base_url: &url::Url) -> String {
     format!("campus-lms:{}", base_url.as_str().trim_end_matches('/'))
+}
+
+pub fn service_name(profile: &Profile) -> String {
+    format!(
+        "{}:{}",
+        legacy_service_name(&profile.base_url),
+        profile.service
+    )
 }
 
 pub fn credential_target(profile: &Profile) -> CredentialTarget {
     CredentialTarget {
-        service: service_name(&profile.base_url),
+        service: service_name(profile),
         account: profile.username.clone(),
         backend: backend_name().to_string(),
     }
@@ -43,7 +51,7 @@ pub fn backend_name() -> &'static str {
 }
 
 pub fn set_token(profile: &Profile, token: &str) -> crate::error::Result<()> {
-    let entry = Entry::new(&service_name(&profile.base_url), &profile.username)
+    let entry = Entry::new(&service_name(profile), &profile.username)
         .map_err(|err| CampusError::keychain(err.to_string()))?;
     entry
         .set_password(token)
@@ -55,20 +63,38 @@ pub fn get_token(profile: &Profile) -> crate::error::Result<String> {
 }
 
 pub fn get_token_detailed(profile: &Profile) -> crate::error::Result<String> {
-    let entry = Entry::new(&service_name(&profile.base_url), &profile.username)
+    let entry = Entry::new(&service_name(profile), &profile.username)
         .map_err(|err| CampusError::keychain(err.to_string()))?;
-    entry.get_password().map_err(|err| match err {
-        keyring::Error::NoEntry => CampusError::AuthRequired { json: false },
-        other => CampusError::keychain(other.to_string()),
-    })
+    match entry.get_password() {
+        Ok(token) => Ok(token),
+        Err(keyring::Error::NoEntry) => {
+            let legacy = Entry::new(&legacy_service_name(&profile.base_url), &profile.username)
+                .map_err(|err| CampusError::keychain(err.to_string()))?;
+            match legacy.get_password() {
+                Ok(token) => {
+                    set_token(profile, &token)?;
+                    Ok(token)
+                }
+                Err(keyring::Error::NoEntry) => Err(CampusError::AuthRequired { json: false }),
+                Err(other) => Err(CampusError::keychain(other.to_string())),
+            }
+        }
+        Err(other) => Err(CampusError::keychain(other.to_string())),
+    }
 }
 
 pub fn delete_token(profile: &Profile) -> crate::error::Result<()> {
-    let entry = Entry::new(&service_name(&profile.base_url), &profile.username)
+    let entry = Entry::new(&service_name(profile), &profile.username)
         .map_err(|err| CampusError::keychain(err.to_string()))?;
-    match entry.delete_credential() {
+    let result = match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) => Err(CampusError::keychain(err.to_string())),
+    };
+    let legacy_entry = Entry::new(&legacy_service_name(&profile.base_url), &profile.username)
+        .map_err(|err| CampusError::keychain(err.to_string()))?;
+    match legacy_entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => result,
         Err(err) => Err(CampusError::keychain(err.to_string())),
     }
 }

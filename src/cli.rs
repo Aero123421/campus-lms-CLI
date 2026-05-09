@@ -289,6 +289,12 @@ pub struct TodoArgs {
         help = "Do not call per-assignment submission-status APIs for fallback tasks"
     )]
     pub no_submission_status_check: bool,
+
+    #[arg(
+        long,
+        help = "Include fallback assignments that do not have a due date"
+    )]
+    pub include_undated: bool,
 }
 
 #[derive(Debug, Subcommand)]

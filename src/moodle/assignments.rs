@@ -41,6 +41,10 @@ struct AssignmentDetailCache {
     item: AssignmentIndexItem,
     submission: Option<SubmissionStatusResponse>,
     warnings: Vec<Warning>,
+    #[serde(default)]
+    description_text: Option<String>,
+    #[serde(default)]
+    description_html_available: bool,
 }
 
 pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
@@ -58,10 +62,9 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
     let config = config::load(cli).map_err(|err| err.with_json(cli.json))?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config).map_err(|err| err.with_json(cli.json))?;
-    prune_profile_cache(profile).map_err(|err| err.with_json(cli.json))?;
-
     let namespace = cache::profile_namespace(&profile_name, profile, None);
-    let detail_key = cache::key("assignment-show", &format!("v3:{namespace}:{id}"));
+    prune_profile_cache(&namespace, profile).map_err(|err| err.with_json(cli.json))?;
+    let detail_key = cache::profile_key("assignment-show", &namespace, &format!("v4:{id}"));
     let ttl_seconds = profile.cache_ttl_seconds;
     let ttl = Duration::from_secs(ttl_seconds);
 
@@ -81,7 +84,7 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
     }
 
     if args.offline {
-        let entry = cached_assignment_index(&profile_name, profile, ttl)
+        let entry = cached_assignment_index(&profile_name, profile, ttl, id)
             .map_err(|err| err.with_json(cli.json))?
             .ok_or_else(|| CampusError::cache("offline cache miss for assignments"))?;
         let cache_meta = CacheMeta::from_entry(&entry, ttl_seconds);
@@ -104,6 +107,8 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
                 item,
                 submission: None,
                 warnings,
+                description_text: None,
+                description_html_available: false,
             },
             cache_meta,
             profile,
@@ -142,10 +147,15 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
         item,
         submission,
         warnings,
+        description_text: None,
+        description_html_available: false,
     };
     if !args.no_cache {
-        cache::set(&detail_key, &redact_assignment_detail_cache(&detail))
-            .map_err(|err| err.with_json(cli.json))?;
+        cache::set(
+            &detail_key,
+            &redact_assignment_detail_cache(&detail, args.include_html),
+        )
+        .map_err(|err| err.with_json(cli.json))?;
     }
     let value =
         render_assignment_output(cli, args, detail, CacheMeta::fresh(ttl_seconds), profile)?;
@@ -163,10 +173,12 @@ fn render_assignment_output(
     let warnings = detail.warnings;
     let submission = detail.submission.as_ref();
     let description_html = item.assignment.intro.clone();
-    let description_text = description_html
-        .as_deref()
-        .map(html_to_text)
-        .unwrap_or_default();
+    let description_text = detail.description_text.unwrap_or_else(|| {
+        description_html
+            .as_deref()
+            .map(html_to_text)
+            .unwrap_or_default()
+    });
     let original_len = description_text.chars().count();
     let truncated_text = truncate_chars(&description_text, args.max_chars);
     let assignment_url = profile
@@ -188,10 +200,7 @@ fn render_assignment_output(
                 .clone()
                 .unwrap_or_else(|| "attachment".to_string());
             AttachmentOutput {
-                id: format!(
-                    "file:sha256:{}",
-                    sha_file_id(&name, file.fileurl.as_deref().unwrap_or(""))
-                ),
+                id: stable_attachment_id(item.assignment.id, file),
                 name,
                 mime_type: file.mimetype.clone(),
                 size_bytes: file.filesize,
@@ -227,7 +236,7 @@ fn render_assignment_output(
         .and_then(|attempt| attempt.gradingstatus.clone());
 
     Ok(AssignmentOutput {
-        schema_version: "campus-lms.assignment.v1",
+        schema_version: "campus-lms.assignment.v2".to_string(),
         generated_at: output::generated_at(),
         cache: cache_meta,
         assignment: AssignmentDetailOutput {
@@ -248,7 +257,8 @@ fn render_assignment_output(
             } else {
                 None
             },
-            description_html_available: item.assignment.intro.is_some(),
+            description_html_available: item.assignment.intro.is_some()
+                || detail.description_html_available,
             attachments,
             submission: AssignmentSubmissionOutput {
                 status: submission_status,
@@ -276,10 +286,11 @@ pub fn fetch_assignments_for_courses(
     let config = config::load(cli)?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config)?;
-    prune_profile_cache(profile)?;
     let namespace = cache::profile_namespace(&profile_name, profile, None);
+    prune_profile_cache(&namespace, profile)?;
     let cache_key = assignments_cache_key(&namespace, course_ids);
-    if let Some(payload) = cache::get(&cache_key, Duration::from_secs(600), refresh, offline)? {
+    let ttl = Duration::from_secs(profile.cache_ttl_seconds);
+    if let Some(payload) = cache::get(&cache_key, ttl, refresh, offline)? {
         return Ok(payload);
     }
     if offline {
@@ -324,17 +335,45 @@ fn assignments_cache_key(namespace: &str, course_ids: &[i64]) -> String {
             .collect::<Vec<_>>()
             .join(",")
     };
-    cache::key("assignments", &format!("v2:{namespace}:courses={scope}"))
+    cache::profile_key("assignments", namespace, &format!("v3:courses={scope}"))
 }
 
 fn cached_assignment_index(
     profile_name: &str,
     profile: &config::Profile,
     ttl: Duration,
+    assignment_id: i64,
 ) -> crate::error::Result<Option<cache::CacheEntry<AssignmentIndexPayload>>> {
     let namespace = cache::profile_namespace(profile_name, profile, None);
     let cache_key = assignments_cache_key(&namespace, &[]);
-    cache::get_entry_optional(&cache_key, ttl, false, true)
+    if let Some(entry) =
+        cache::get_entry_optional::<AssignmentIndexPayload>(&cache_key, ttl, false, true)?
+    {
+        if entry
+            .value
+            .items
+            .iter()
+            .any(|item| item.assignment.id == assignment_id)
+        {
+            return Ok(Some(entry));
+        }
+    }
+    Ok(
+        cache::profile_entries_with_prefix::<AssignmentIndexPayload>(
+            &namespace,
+            "assignments-",
+            ttl,
+            true,
+        )?
+        .into_iter()
+        .find(|entry| {
+            entry
+                .value
+                .items
+                .iter()
+                .any(|item| item.assignment.id == assignment_id)
+        }),
+    )
 }
 
 fn find_assignment(
@@ -353,8 +392,12 @@ fn find_assignment(
         })
 }
 
-fn prune_profile_cache(profile: &config::Profile) -> crate::error::Result<()> {
-    cache::prune_older_than(Duration::from_secs(profile.cache_retention_seconds)).map(|_| ())
+fn prune_profile_cache(namespace: &str, profile: &config::Profile) -> crate::error::Result<()> {
+    cache::prune_namespace(
+        namespace,
+        Duration::from_secs(profile.cache_retention_seconds),
+    )
+    .map(|_| ())
 }
 
 pub fn parse_assign_id(input: &str) -> crate::error::Result<i64> {
@@ -389,29 +432,69 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
     input.chars().take(max_chars).collect()
 }
 
-fn sha_file_id(name: &str, url: &str) -> String {
+fn stable_attachment_id(assign_id: i64, file: &crate::moodle::models::MoodleFile) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(name.as_bytes());
-    hasher.update(url.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hasher.update(assign_id.to_string().as_bytes());
+    hasher.update(file.contenthash.as_deref().unwrap_or("").as_bytes());
+    hasher.update(file.pathnamehash.as_deref().unwrap_or("").as_bytes());
+    hasher.update(file.filename.as_deref().unwrap_or("").as_bytes());
+    hasher.update(file.filepath.as_deref().unwrap_or("").as_bytes());
+    hasher.update(file.filesize.unwrap_or_default().to_string().as_bytes());
+    hasher.update(file.mimetype.as_deref().unwrap_or("").as_bytes());
+    format!("file:sha256:{:x}", hasher.finalize())
 }
 
 fn redact_assignment_cache(payload: &AssignmentIndexPayload) -> AssignmentIndexPayload {
     let mut redacted = payload.clone();
     for item in &mut redacted.items {
-        for file in &mut item.assignment.introattachments {
-            file.fileurl = None;
-        }
+        item.assignment.intro = None;
+        item.assignment.introattachments.clear();
     }
     redacted
 }
 
-fn redact_assignment_detail_cache(detail: &AssignmentDetailCache) -> AssignmentDetailCache {
+fn redact_assignment_detail_cache(
+    detail: &AssignmentDetailCache,
+    cache_html: bool,
+) -> AssignmentDetailCache {
     let mut redacted = detail.clone();
+    redacted.description_text = redacted
+        .description_text
+        .or_else(|| redacted.item.assignment.intro.as_deref().map(html_to_text));
+    redacted.description_html_available = redacted.item.assignment.intro.is_some();
+    if cache_html {
+        redacted.item.assignment.intro = redacted.item.assignment.intro.map(sanitize_cached_html);
+    } else {
+        redacted.item.assignment.intro = None;
+    }
     for file in &mut redacted.item.assignment.introattachments {
         file.fileurl = None;
     }
     redacted
+}
+
+fn sanitize_cached_html(input: String) -> String {
+    let mut output = input;
+    for key in ["wstoken", "token", "sesskey"] {
+        output = strip_query_value(&output, key);
+    }
+    output
+}
+
+fn strip_query_value(input: &str, key: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    let needle_a = format!("{key}=");
+    while let Some(index) = rest.find(&needle_a) {
+        output.push_str(&rest[..index]);
+        output.push_str(&needle_a);
+        let tail = &rest[index + needle_a.len()..];
+        let end = tail.find(['&', '"', '\'', '<', '>']).unwrap_or(tail.len());
+        output.push_str("REDACTED");
+        rest = &tail[end..];
+    }
+    output.push_str(rest);
+    output
 }
 
 fn filter_assignment_warnings(
@@ -436,6 +519,7 @@ fn filter_assignment_warnings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::moodle::models::MoodleFile;
 
     #[test]
     fn parses_prefixed_assignment_id() {
@@ -452,5 +536,70 @@ mod tests {
         let key_b = assignments_cache_key("profile", &[]);
         assert_eq!(key_a, key_b);
         assert_ne!(key_a, assignments_cache_key("profile", &[123]));
+    }
+
+    #[test]
+    fn attachment_id_does_not_depend_on_file_url() {
+        let mut file = MoodleFile {
+            filename: Some("report.pdf".to_string()),
+            filepath: Some("/".to_string()),
+            contenthash: None,
+            pathnamehash: None,
+            filesize: Some(10),
+            mimetype: Some("application/pdf".to_string()),
+            fileurl: Some(
+                "https://example.edu/pluginfile.php/1/report.pdf?token=secret".to_string(),
+            ),
+        };
+        let live_id = stable_attachment_id(42, &file);
+        file.fileurl = None;
+        assert_eq!(live_id, stable_attachment_id(42, &file));
+    }
+
+    #[test]
+    fn index_cache_removes_assignment_body_and_attachments() {
+        let payload = AssignmentIndexPayload {
+            items: vec![AssignmentIndexItem {
+                course_id: "course:1".to_string(),
+                course_name: None,
+                assignment: Assignment {
+                    id: 42,
+                    cmid: Some(100),
+                    course: Some(1),
+                    name: Some("Report".to_string()),
+                    intro: Some("<p>Private body</p>".to_string()),
+                    duedate: None,
+                    allowsubmissionsfromdate: None,
+                    cutoffdate: None,
+                    introattachments: vec![MoodleFile {
+                        filename: Some("report.pdf".to_string()),
+                        filepath: Some("/".to_string()),
+                        contenthash: None,
+                        pathnamehash: None,
+                        filesize: Some(10),
+                        mimetype: Some("application/pdf".to_string()),
+                        fileurl: Some(
+                            "https://example.edu/pluginfile.php/1/report.pdf".to_string(),
+                        ),
+                    }],
+                },
+            }],
+            warnings: Vec::new(),
+        };
+        let redacted = redact_assignment_cache(&payload);
+        assert!(redacted.items[0].assignment.intro.is_none());
+        assert!(redacted.items[0].assignment.introattachments.is_empty());
+    }
+
+    #[test]
+    fn cached_html_redacts_common_secret_query_values() {
+        let html = r#"<a href="https://example.edu/pluginfile.php/1/file.pdf?token=secret&wstoken=abc&x=1">file</a><img src="/x?sesskey=s3">"#;
+        let sanitized = sanitize_cached_html(html.to_string());
+        assert!(sanitized.contains("token=REDACTED"));
+        assert!(sanitized.contains("wstoken=REDACTED"));
+        assert!(sanitized.contains("sesskey=REDACTED"));
+        assert!(!sanitized.contains("secret"));
+        assert!(!sanitized.contains("abc"));
+        assert!(!sanitized.contains("s3"));
     }
 }

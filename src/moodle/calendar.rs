@@ -106,7 +106,6 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let config = config::load(cli)?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config)?;
-    cache::prune_older_than(Duration::from_secs(profile.cache_retention_seconds))?;
     let course_filter = args
         .course
         .as_deref()
@@ -118,17 +117,22 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
         .map(|(_, id)| vec![*id])
         .unwrap_or_default();
     let namespace = cache::profile_namespace(&profile_name, profile, None);
-    let cache_key = cache::key(
+    cache::prune_namespace(
+        &namespace,
+        Duration::from_secs(profile.cache_retention_seconds),
+    )?;
+    let cache_key = cache::profile_key(
         "todo",
+        &namespace,
         &format!(
-            "v6:{}:{}:{:?}:{}:{:?}:{}:{}",
-            namespace,
+            "v8:{}:{:?}:{}:{:?}:{}:{}:{}",
             args.days,
             normalized_course,
             args.include_submitted,
             args.max_items,
             args.status_check_limit,
-            args.no_submission_status_check
+            args.no_submission_status_check,
+            args.include_undated
         ),
     );
     let ttl_seconds = profile.cache_ttl_seconds;
@@ -248,6 +252,9 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
             }
         }
         let due = valid_due(item.assignment.duedate);
+        if due.is_none() && !args.include_undated {
+            continue;
+        }
         if due.is_some_and(|due| due > to.unix_timestamp()) {
             continue;
         }

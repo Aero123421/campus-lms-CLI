@@ -75,6 +75,7 @@ pub fn login(cli: &Cli, args: &LoginArgs) -> crate::error::Result<()> {
         base_url,
         username,
         service: args.service.clone(),
+        allow_insecure_localhost: args.allow_insecure_localhost,
         cache_ttl_seconds: config::default_cache_ttl_seconds(),
         cache_retention_seconds: config::default_cache_retention_seconds(),
     };
@@ -92,7 +93,7 @@ pub fn login(cli: &Cli, args: &LoginArgs) -> crate::error::Result<()> {
 
     if cli.json {
         output::print_json(&AuthLoginOutput {
-            schema_version: "campus-lms.auth_login.v1",
+            schema_version: "campus-lms.auth_login.v2".to_string(),
             generated_at: output::generated_at(),
             authenticated: true,
             profile: profile_name,
@@ -137,6 +138,7 @@ pub fn import_token(cli: &Cli, args: &ImportTokenArgs) -> crate::error::Result<(
         base_url,
         username: args.username.clone(),
         service: args.service.clone(),
+        allow_insecure_localhost: args.allow_insecure_localhost,
         cache_ttl_seconds: config::default_cache_ttl_seconds(),
         cache_retention_seconds: config::default_cache_retention_seconds(),
     };
@@ -154,26 +156,18 @@ pub fn import_token(cli: &Cli, args: &ImportTokenArgs) -> crate::error::Result<(
     config::save(cli, &config).map_err(|err| err.with_json(cli.json))?;
 
     let mut token_live_verified = None;
-    let mut warnings = Vec::new();
     if args.live {
         match client_from_profile_data(cli, &profile_name, &profile)
             .and_then(|client| client.site_info())
         {
             Ok(_) => token_live_verified = Some(true),
-            Err(err) => {
-                token_live_verified = Some(false);
-                warnings.push(Warning::new(
-                    err.code(),
-                    err.to_string(),
-                    err.hint().map(str::to_string),
-                ));
-            }
+            Err(err) => return Err(err.with_json(cli.json)),
         }
     }
 
     if cli.json {
         output::print_json(&AuthImportTokenOutput {
-            schema_version: "campus-lms.auth_import_token.v1",
+            schema_version: "campus-lms.auth_import_token.v2".to_string(),
             generated_at: output::generated_at(),
             authenticated: token_live_verified.unwrap_or(true),
             profile: profile_name,
@@ -182,7 +176,7 @@ pub fn import_token(cli: &Cli, args: &ImportTokenArgs) -> crate::error::Result<(
             credential_target: keychain::credential_target(&profile),
             token_storage_verified: true,
             token_live_verified,
-            warnings,
+            warnings: Vec::new(),
             next_steps: vec![
                 "Run: campus-lms auth status --live --json".to_string(),
                 "Run: campus-lms doctor --json".to_string(),

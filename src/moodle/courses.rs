@@ -42,11 +42,14 @@ pub fn fetch(cli: &Cli, refresh: bool, offline: bool) -> crate::error::Result<Fe
     let config = config::load(cli)?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config)?;
-    cache::prune_older_than(Duration::from_secs(profile.cache_retention_seconds))?;
     let ttl_seconds = profile.cache_ttl_seconds;
     let ttl = Duration::from_secs(ttl_seconds);
     let namespace = cache::profile_namespace(&profile_name, profile, None);
-    let cache_key = cache::key("courses", &namespace);
+    cache::prune_namespace(
+        &namespace,
+        Duration::from_secs(profile.cache_retention_seconds),
+    )?;
+    let cache_key = cache::profile_key("courses", &namespace, "v2");
     if let Some(entry) = cache::get_entry(&cache_key, ttl, refresh, offline)? {
         return Ok(FetchedCourses {
             cache: CacheMeta::from_entry(&entry, ttl_seconds),

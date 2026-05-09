@@ -21,6 +21,12 @@ const installedBinary = path.join(root, "npm", "bin", exe);
 const releaseBinary = path.join(root, "target", "release", exe);
 const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+
+if (process.env.CAMPUS_LMS_BUILD_FROM_SOURCE === "1") {
+  buildFromSource();
+  process.exit(0);
+}
 
 if (prebuiltBinary && fs.existsSync(prebuiltBinary)) {
   const checksumFile = `${prebuiltBinary}.sha256`;
@@ -43,10 +49,6 @@ if (fs.existsSync(releaseBinary)) {
 installDownloadedBinary()
   .then((installed) => {
     if (installed) {
-      process.exit(0);
-    }
-    if (process.env.CAMPUS_LMS_BUILD_FROM_SOURCE === "1") {
-      buildFromSource();
       process.exit(0);
     }
     console.error(
@@ -75,13 +77,16 @@ async function installDownloadedBinary() {
   const url = `${normalizedBaseUrl}/${name}`;
   const checksumUrl = `${normalizedBaseUrl}/${checksumName}`;
   const checksumTarget = `${installedBinary}.sha256`;
+  const tmpBinary = `${installedBinary}.download`;
   fs.mkdirSync(path.dirname(installedBinary), { recursive: true });
   try {
     await download(checksumUrl, checksumTarget);
-    await download(url, installedBinary);
-    verifyChecksum(installedBinary, checksumTarget, name);
+    await download(url, tmpBinary);
+    verifyChecksum(tmpBinary, checksumTarget, name);
+    fs.renameSync(tmpBinary, installedBinary);
   } finally {
     fs.rmSync(checksumTarget, { force: true });
+    fs.rmSync(tmpBinary, { force: true });
   }
   markExecutable(installedBinary);
   return true;
@@ -231,6 +236,9 @@ function download(url, target, redirects = 0) {
         file.on("error", fail);
       }
     );
+    request.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+      request.destroy(new Error(`Timed out downloading ${url}`));
+    });
     request.on("error", fail);
   });
 }

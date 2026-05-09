@@ -31,6 +31,8 @@ pub struct Profile {
     pub username: String,
     #[serde(default = "default_service")]
     pub service: String,
+    #[serde(default)]
+    pub allow_insecure_localhost: bool,
     #[serde(default = "default_cache_ttl_seconds")]
     pub cache_ttl_seconds: u64,
     #[serde(default = "default_cache_retention_seconds")]
@@ -161,6 +163,50 @@ pub fn selected_profile_name(cli: &Cli, config: &Config) -> String {
 
 pub fn validate(config: &Config) -> crate::error::Result<()> {
     validate_timezone(&config.output.timezone)?;
+    for (name, profile) in &config.profile {
+        validate_profile(name, profile)?;
+    }
+    Ok(())
+}
+
+pub fn validate_profile(name: &str, profile: &Profile) -> crate::error::Result<()> {
+    let allowed_https = profile.base_url.scheme() == "https";
+    let allowed_localhost = profile.allow_insecure_localhost
+        && profile.base_url.scheme() == "http"
+        && matches!(
+            profile.base_url.host_str(),
+            Some("localhost") | Some("127.0.0.1") | Some("::1")
+        );
+    if !allowed_https && !allowed_localhost {
+        return Err(CampusError::config(format!(
+            "profile '{name}' base_url must use HTTPS"
+        )));
+    }
+    if !profile.base_url.username().is_empty() || profile.base_url.password().is_some() {
+        return Err(CampusError::config(format!(
+            "profile '{name}' base_url must not contain username or password"
+        )));
+    }
+    if profile.base_url.query().is_some() || profile.base_url.fragment().is_some() {
+        return Err(CampusError::config(format!(
+            "profile '{name}' base_url must not contain query or fragment"
+        )));
+    }
+    if !profile.base_url.path().ends_with('/') {
+        return Err(CampusError::config(format!(
+            "profile '{name}' base_url path must end with '/'"
+        )));
+    }
+    if profile.username.trim().is_empty() {
+        return Err(CampusError::config(format!(
+            "profile '{name}' username must not be empty"
+        )));
+    }
+    if profile.service.trim().is_empty() {
+        return Err(CampusError::config(format!(
+            "profile '{name}' service must not be empty"
+        )));
+    }
     Ok(())
 }
 
@@ -209,4 +255,36 @@ fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     }
     fs::rename(tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(base_url: &str) -> Profile {
+        Profile {
+            base_url: Url::parse(base_url).unwrap(),
+            username: "student".to_string(),
+            service: default_service(),
+            allow_insecure_localhost: false,
+            cache_ttl_seconds: default_cache_ttl_seconds(),
+            cache_retention_seconds: default_cache_retention_seconds(),
+        }
+    }
+
+    #[test]
+    fn rejects_insecure_or_ambiguous_manual_profile_urls() {
+        assert!(validate_profile("default", &profile("http://example.edu/")).is_err());
+        assert!(validate_profile("default", &profile("https://user@example.edu/")).is_err());
+        assert!(validate_profile("default", &profile("https://example.edu/lms?x=1")).is_err());
+        assert!(validate_profile("default", &profile("https://example.edu/lms")).is_err());
+        assert!(validate_profile("default", &profile("https://example.edu/lms/")).is_ok());
+    }
+
+    #[test]
+    fn allows_explicit_insecure_localhost_profile() {
+        let mut p = profile("http://localhost/moodle/");
+        p.allow_insecure_localhost = true;
+        assert!(validate_profile("local", &p).is_ok());
+    }
 }

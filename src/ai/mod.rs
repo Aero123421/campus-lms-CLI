@@ -48,8 +48,10 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         course: None,
         status_check_limit: 20,
         no_submission_status_check: false,
+        include_undated: false,
     };
     let fetched = calendar::fetch(cli, &todo_args).map_err(|err| err.with_json(cli.json))?;
+    let cache = fetched.cache;
     let payload = fetched.payload;
     let total_matching_count = payload.total_items_before_limit;
     warnings.extend(payload.warnings.clone());
@@ -93,8 +95,9 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
     let report =
         warning_report_with_options(warnings, detail_limit, &std::collections::BTreeSet::new());
     output::print_json(&AiSnapshotOutput {
-        schema_version: "campus-lms.ai_snapshot.v1",
+        schema_version: "campus-lms.ai_snapshot.v2".to_string(),
         generated_at: output::generated_at(),
+        cache,
         privacy: PrivacyOutput {
             grades_included: false,
             feedback_included: false,

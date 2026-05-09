@@ -258,7 +258,7 @@ pub struct AuthStatusOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AuthLoginOutput {
-    pub schema_version: &'static str,
+    pub schema_version: String,
     pub generated_at: String,
     pub authenticated: bool,
     pub profile: String,
@@ -273,7 +273,7 @@ pub struct AuthLoginOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AuthImportTokenOutput {
-    pub schema_version: &'static str,
+    pub schema_version: String,
     pub generated_at: String,
     pub authenticated: bool,
     pub profile: String,
@@ -451,7 +451,7 @@ pub struct AssignmentDetailOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AssignmentOutput {
-    pub schema_version: &'static str,
+    pub schema_version: String,
     pub generated_at: String,
     pub cache: CacheMeta,
     pub assignment: AssignmentDetailOutput,
@@ -490,8 +490,9 @@ pub struct SnapshotCourse {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AiSnapshotOutput {
-    pub schema_version: &'static str,
+    pub schema_version: String,
     pub generated_at: String,
+    pub cache: CacheMeta,
     pub privacy: PrivacyOutput,
     pub range: DateRange,
     pub summary: SummaryOutput,
@@ -546,8 +547,15 @@ mod tests {
     #[test]
     fn ai_snapshot_golden_shape_is_stable() {
         let output = AiSnapshotOutput {
-            schema_version: "campus-lms.ai_snapshot.v1",
+            schema_version: "campus-lms.ai_snapshot.v2".to_string(),
             generated_at: "2026-05-08T00:00:00Z".to_string(),
+            cache: CacheMeta {
+                used: false,
+                fetched_at: Some("2026-05-08T00:00:00Z".to_string()),
+                age_seconds: None,
+                ttl_seconds: 300,
+                stale: false,
+            },
             privacy: PrivacyOutput {
                 grades_included: false,
                 feedback_included: false,
@@ -602,8 +610,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(output).unwrap(),
             serde_json::json!({
-                "schema_version": "campus-lms.ai_snapshot.v1",
+                "schema_version": "campus-lms.ai_snapshot.v2",
                 "generated_at": "2026-05-08T00:00:00Z",
+                "cache": {
+                    "used": false,
+                    "fetched_at": "2026-05-08T00:00:00Z",
+                    "ttl_seconds": 300,
+                    "stale": false
+                },
                 "privacy": {
                     "grades_included": false,
                     "feedback_included": false,

@@ -33,6 +33,16 @@ pub fn key(name: &str, input: &str) -> String {
     format!("{name}-{:x}.json", hasher.finalize())
 }
 
+pub fn profile_key(name: &str, namespace: &str, input: &str) -> String {
+    format!("{}/{}", profile_dir(namespace), key(name, input))
+}
+
+pub fn profile_dir(namespace: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(namespace.as_bytes());
+    format!("profile-{:x}", hasher.finalize())
+}
+
 pub fn get<T: DeserializeOwned>(
     cache_key: &str,
     ttl: Duration,
@@ -145,8 +155,42 @@ pub fn set<T: Serialize>(cache_key: &str, value: &T) -> crate::error::Result<()>
         .map_err(|err| CampusError::cache(format!("failed to write {}: {err}", path.display())))
 }
 
-pub fn prune_older_than(retention: Duration) -> crate::error::Result<usize> {
-    let dir = cache_dir()?;
+pub fn prune_namespace(namespace: &str, retention: Duration) -> crate::error::Result<usize> {
+    let dir = cache_dir()?.join(profile_dir(namespace));
+    prune_dir_older_than(dir, retention)
+}
+
+pub fn profile_entries_with_prefix<T: DeserializeOwned>(
+    namespace: &str,
+    prefix: &str,
+    ttl: Duration,
+    allow_stale: bool,
+) -> crate::error::Result<Vec<CacheEntry<T>>> {
+    let dir = cache_dir()?.join(profile_dir(namespace));
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = fs::read_dir(&dir)
+        .map_err(|err| CampusError::cache(format!("failed to read {}: {err}", dir.display())))?;
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            CampusError::cache(format!("failed to inspect {}: {err}", dir.display()))
+        })?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with(prefix) || !file_name.ends_with(".json") {
+            continue;
+        }
+        let relative = format!("{}/{}", profile_dir(namespace), file_name);
+        if let Some(hit) = get_entry_optional(&relative, ttl, false, allow_stale)? {
+            out.push(hit);
+        }
+    }
+    Ok(out)
+}
+
+fn prune_dir_older_than(dir: PathBuf, retention: Duration) -> crate::error::Result<usize> {
     if !dir.exists() {
         return Ok(0);
     }
