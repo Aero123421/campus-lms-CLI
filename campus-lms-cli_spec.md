@@ -440,14 +440,13 @@ base_url = "https://lms.example.ac.jp"
 username = "student@example.ac.jp"
 service = "moodle_mobile_app"
 cache_ttl_seconds = 300
+cache_retention_seconds = 2592000
 
 [privacy]
 include_grades_in_ai_snapshot = false
 include_feedback_in_ai_snapshot = false
-include_user_email = false
 
 [output]
-default_format = "text"
 timezone = "Asia/Tokyo"
 ```
 
@@ -477,8 +476,9 @@ campus-lms [GLOBAL_OPTIONS] <COMMAND>
 | `--profile <NAME>` | 利用する profile |
 | `--config <PATH>` | 設定ファイルパスを明示 |
 | `--json` | JSON 出力 |
-| `--no-color` | 色なし出力 |
+| `--no-color` | 互換用予約オプション。現状の出力は色を使わない |
 | `--verbose` | 詳細ログ。ただし秘密情報は出さない |
+| `--warning-details <N\|all>` | warning 詳細件数。通常は0、`--verbose` は all |
 | `--quiet` | 最小出力 |
 | `--version` | バージョン表示 |
 | `--help` | help |

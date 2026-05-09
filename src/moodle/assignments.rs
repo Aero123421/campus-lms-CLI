@@ -12,7 +12,7 @@ use crate::{
     config,
     dto::{
         warning_report_with_options, AssignmentDetailOutput, AssignmentOutput,
-        AssignmentSubmissionOutput, AttachmentOutput, Warning,
+        AssignmentSubmissionOutput, AttachmentOutput, CacheMeta, Warning,
     },
     error::CampusError,
     moodle::{
@@ -36,50 +36,91 @@ pub struct AssignmentIndexPayload {
     pub warnings: Vec<Warning>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct AssignmentDetailCache {
+    item: AssignmentIndexItem,
+    submission: Option<SubmissionStatusResponse>,
+    warnings: Vec<Warning>,
+}
+
 pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
     ensure_cache_flags(args.refresh, args.offline).map_err(|err| err.with_json(cli.json))?;
     ensure_max_chars(args.max_chars).map_err(|err| err.with_json(cli.json))?;
+    if args.offline && args.no_cache {
+        return Err(CampusError::invalid_argument(
+            "--offline cannot be used with --no-cache.",
+            Some("Use --offline to read cache, or --no-cache to force a live read."),
+        )
+        .with_json(cli.json));
+    }
+
     let id = parse_assign_id(&args.id).map_err(|err| err.with_json(cli.json))?;
     let config = config::load(cli).map_err(|err| err.with_json(cli.json))?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config).map_err(|err| err.with_json(cli.json))?;
+    prune_profile_cache(profile).map_err(|err| err.with_json(cli.json))?;
+
     let namespace = cache::profile_namespace(&profile_name, profile, None);
-    let cache_key = cache::key(
-        "assignment-show",
-        &format!("v2:{namespace}:{id}:{}", args.include_html),
-    );
-    if let Some(value) = cache::get::<serde_json::Value>(
-        &cache_key,
-        Duration::from_secs(600),
-        args.refresh,
-        args.offline,
-    )
-    .map_err(|err| err.with_json(cli.json))?
-    {
+    let detail_key = cache::key("assignment-show", &format!("v3:{namespace}:{id}"));
+    let ttl_seconds = profile.cache_ttl_seconds;
+    let ttl = Duration::from_secs(ttl_seconds);
+
+    if !args.no_cache {
+        if let Some(entry) = cache::get_entry_optional::<AssignmentDetailCache>(
+            &detail_key,
+            ttl,
+            args.refresh,
+            args.offline,
+        )
+        .map_err(|err| err.with_json(cli.json))?
+        {
+            let cache_meta = CacheMeta::from_entry(&entry, ttl_seconds);
+            let value = render_assignment_output(cli, args, entry.value, cache_meta, profile)?;
+            return output::print_json(&value);
+        }
+    }
+
+    if args.offline {
+        let entry = cached_assignment_index(&profile_name, profile, ttl)
+            .map_err(|err| err.with_json(cli.json))?
+            .ok_or_else(|| CampusError::cache("offline cache miss for assignments"))?;
+        let cache_meta = CacheMeta::from_entry(&entry, ttl_seconds);
+        let payload = entry.value;
+        let item = find_assignment(&payload, id, cli.json)?;
+        let mut warnings =
+            filter_assignment_warnings(payload.warnings, id, item.course_id.as_str());
+        warnings.push(Warning::new(
+            "ASSIGNMENT_DETAIL_RECONSTRUCTED_FROM_INDEX_CACHE",
+            "Assignment detail was reconstructed from cached assignment index data.",
+            Some(
+                "Submission status may be unknown because --offline does not contact Moodle."
+                    .to_string(),
+            ),
+        ));
+        let value = render_assignment_output(
+            cli,
+            args,
+            AssignmentDetailCache {
+                item,
+                submission: None,
+                warnings,
+            },
+            cache_meta,
+            profile,
+        )?;
         return output::print_json(&value);
     }
 
     let client = client_from_profile_data(cli, &profile_name, profile)
         .map_err(|err| err.with_json(cli.json))?;
-    let all = if args.offline {
-        fetch_assignments(cli, args.refresh, args.offline).map_err(|err| err.with_json(cli.json))?
-    } else {
-        fetch_assignments_from_api(&client).map_err(|err| err.with_json(cli.json))?
-    };
-    let item = all
-        .items
-        .into_iter()
-        .find(|item| item.assignment.id == id)
-        .ok_or_else(|| CampusError::NotFound {
-            message: format!("assignment {} was not found in visible courses", args.id),
-            json: cli.json,
-        })?;
-
-    let mut warnings = filter_assignment_warnings(all.warnings, id, item.course_id.as_str());
+    let payload =
+        fetch_assignments_from_api(&client, &[]).map_err(|err| err.with_json(cli.json))?;
+    let item = find_assignment(&payload, id, cli.json)?;
+    let mut warnings = filter_assignment_warnings(payload.warnings, id, item.course_id.as_str());
     let submission = match client.submission_status(id) {
         Ok(submission) => {
             warnings.extend(submission.warnings.iter().map(Warning::from_moodle_warning));
-            submission
+            Some(submission)
         }
         Err(err @ CampusError::AuthRequired { .. })
         | Err(err @ CampusError::AuthExpired { .. })
@@ -93,13 +134,34 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
                         .to_string(),
                 ),
             ));
-            SubmissionStatusResponse {
-                lastattempt: None,
-                warnings: vec![],
-            }
+            None
         }
     };
 
+    let detail = AssignmentDetailCache {
+        item,
+        submission,
+        warnings,
+    };
+    if !args.no_cache {
+        cache::set(&detail_key, &redact_assignment_detail_cache(&detail))
+            .map_err(|err| err.with_json(cli.json))?;
+    }
+    let value =
+        render_assignment_output(cli, args, detail, CacheMeta::fresh(ttl_seconds), profile)?;
+    output::print_json(&value)
+}
+
+fn render_assignment_output(
+    cli: &Cli,
+    args: &AssignmentShowArgs,
+    detail: AssignmentDetailCache,
+    cache_meta: CacheMeta,
+    profile: &config::Profile,
+) -> crate::error::Result<AssignmentOutput> {
+    let item = detail.item;
+    let warnings = detail.warnings;
+    let submission = detail.submission.as_ref();
     let description_html = item.assignment.intro.clone();
     let description_text = description_html
         .as_deref()
@@ -107,7 +169,7 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
         .unwrap_or_default();
     let original_len = description_text.chars().count();
     let truncated_text = truncate_chars(&description_text, args.max_chars);
-    let assignment_url = client
+    let assignment_url = profile
         .base_url
         .join(&format!(
             "mod/assign/view.php?id={}",
@@ -145,9 +207,29 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
         .chain(item.assignment.cmid)
         .collect();
     let report = warning_report_with_options(warnings, detail_limit, &visible_item_ids);
-    let value = AssignmentOutput {
+    let status_source = match (submission.is_some(), cache_meta.used) {
+        (true, true) => "cache",
+        (true, false) => "live",
+        (false, _) => "unavailable",
+    }
+    .to_string();
+    let submission_status = submission
+        .and_then(|submission| submission.lastattempt.as_ref())
+        .and_then(|attempt| attempt.submission.as_ref())
+        .and_then(|submission| submission.status.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let last_modified_at = submission
+        .and_then(|submission| submission.lastattempt.as_ref())
+        .and_then(|attempt| attempt.submission.as_ref())
+        .and_then(|submission| ts(submission.timemodified));
+    let grading_status = submission
+        .and_then(|submission| submission.lastattempt.as_ref())
+        .and_then(|attempt| attempt.gradingstatus.clone());
+
+    Ok(AssignmentOutput {
         schema_version: "campus-lms.assignment.v1",
         generated_at: output::generated_at(),
+        cache: cache_meta,
         assignment: AssignmentDetailOutput {
             id: format!("assign:{}", item.assignment.id),
             moodle_id: item.assignment.id,
@@ -162,28 +244,17 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
             description_truncated: original_len > args.max_chars,
             description_original_length_chars: original_len,
             description_html: if args.include_html {
-                description_html.clone()
+                description_html
             } else {
                 None
             },
-            description_html_available: description_html.is_some(),
+            description_html_available: item.assignment.intro.is_some(),
             attachments,
             submission: AssignmentSubmissionOutput {
-                status: submission
-                    .lastattempt
-                    .as_ref()
-                    .and_then(|a| a.submission.as_ref())
-                    .and_then(|s| s.status.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                last_modified_at: submission
-                    .lastattempt
-                    .as_ref()
-                    .and_then(|a| a.submission.as_ref())
-                    .and_then(|s| ts(s.timemodified)),
-                grading_status: submission
-                    .lastattempt
-                    .as_ref()
-                    .and_then(|a| a.gradingstatus.clone()),
+                status: submission_status,
+                status_source,
+                last_modified_at,
+                grading_status,
             },
             url: assignment_url,
         },
@@ -192,26 +263,22 @@ pub fn show(cli: &Cli, args: &AssignmentShowArgs) -> crate::error::Result<()> {
         warnings_returned_count: report.returned_count,
         warnings_details_truncated: report.details_truncated,
         warnings: report.details,
-    };
-    let cached_value = serde_json::to_value(&value).map_err(|err| CampusError::Parse {
-        message: format!("failed to serialize assignment output: {err}"),
-        json: cli.json,
-    })?;
-    cache::set(&cache_key, &cached_value).map_err(|err| err.with_json(cli.json))?;
-    output::print_json(&value)
+    })
 }
 
-pub fn fetch_assignments(
+pub fn fetch_assignments_for_courses(
     cli: &Cli,
     refresh: bool,
     offline: bool,
+    course_ids: &[i64],
 ) -> crate::error::Result<AssignmentIndexPayload> {
     ensure_cache_flags(refresh, offline)?;
     let config = config::load(cli)?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config)?;
+    prune_profile_cache(profile)?;
     let namespace = cache::profile_namespace(&profile_name, profile, None);
-    let cache_key = cache::key("assignments", &namespace);
+    let cache_key = assignments_cache_key(&namespace, course_ids);
     if let Some(payload) = cache::get(&cache_key, Duration::from_secs(600), refresh, offline)? {
         return Ok(payload);
     }
@@ -219,15 +286,16 @@ pub fn fetch_assignments(
         return Err(CampusError::cache("offline cache miss for assignments"));
     }
     let client = client_from_profile_data(cli, &profile_name, profile)?;
-    let payload = fetch_assignments_from_api(&client)?;
+    let payload = fetch_assignments_from_api(&client, course_ids)?;
     cache::set(&cache_key, &redact_assignment_cache(&payload))?;
     Ok(payload)
 }
 
 fn fetch_assignments_from_api<T: MoodleApi>(
     client: &T,
+    course_ids: &[i64],
 ) -> crate::error::Result<AssignmentIndexPayload> {
-    let response: AssignmentsResponse = client.assignments(&[])?;
+    let response: AssignmentsResponse = client.assignments(course_ids)?;
     let warnings = response
         .warnings
         .iter()
@@ -244,6 +312,49 @@ fn fetch_assignments_from_api<T: MoodleApi>(
         }
     }
     Ok(AssignmentIndexPayload { items, warnings })
+}
+
+fn assignments_cache_key(namespace: &str, course_ids: &[i64]) -> String {
+    let scope = if course_ids.is_empty() {
+        "all".to_string()
+    } else {
+        course_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    cache::key("assignments", &format!("v2:{namespace}:courses={scope}"))
+}
+
+fn cached_assignment_index(
+    profile_name: &str,
+    profile: &config::Profile,
+    ttl: Duration,
+) -> crate::error::Result<Option<cache::CacheEntry<AssignmentIndexPayload>>> {
+    let namespace = cache::profile_namespace(profile_name, profile, None);
+    let cache_key = assignments_cache_key(&namespace, &[]);
+    cache::get_entry_optional(&cache_key, ttl, false, true)
+}
+
+fn find_assignment(
+    payload: &AssignmentIndexPayload,
+    id: i64,
+    json: bool,
+) -> crate::error::Result<AssignmentIndexItem> {
+    payload
+        .items
+        .iter()
+        .find(|item| item.assignment.id == id)
+        .cloned()
+        .ok_or_else(|| CampusError::NotFound {
+            message: format!("assignment assign:{id} was not found in visible courses"),
+            json,
+        })
+}
+
+fn prune_profile_cache(profile: &config::Profile) -> crate::error::Result<()> {
+    cache::prune_older_than(Duration::from_secs(profile.cache_retention_seconds)).map(|_| ())
 }
 
 pub fn parse_assign_id(input: &str) -> crate::error::Result<i64> {
@@ -295,6 +406,14 @@ fn redact_assignment_cache(payload: &AssignmentIndexPayload) -> AssignmentIndexP
     redacted
 }
 
+fn redact_assignment_detail_cache(detail: &AssignmentDetailCache) -> AssignmentDetailCache {
+    let mut redacted = detail.clone();
+    for file in &mut redacted.item.assignment.introattachments {
+        file.fileurl = None;
+    }
+    redacted
+}
+
 fn filter_assignment_warnings(
     warnings: Vec<Warning>,
     assignment_id: i64,
@@ -325,5 +444,13 @@ mod tests {
         assert!(parse_assign_id("course:123").is_err());
         assert!(parse_assign_id("assign:0").is_err());
         assert!(parse_assign_id("-1").is_err());
+    }
+
+    #[test]
+    fn assignment_cache_key_ignores_output_only_options() {
+        let key_a = assignments_cache_key("profile", &[]);
+        let key_b = assignments_cache_key("profile", &[]);
+        assert_eq!(key_a, key_b);
+        assert_ne!(key_a, assignments_cache_key("profile", &[123]));
     }
 }

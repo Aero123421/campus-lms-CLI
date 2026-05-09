@@ -42,8 +42,10 @@ pub fn init(cli: &Cli, args: &InitArgs) -> crate::error::Result<()> {
     let mut created = Vec::new();
     let mut existing = Vec::new();
 
-    ensure_dir(&config_dir, &mut created, &mut existing).map_err(|err| err.with_json(cli.json))?;
-    ensure_dir(&cache_dir, &mut created, &mut existing).map_err(|err| err.with_json(cli.json))?;
+    ensure_dir(&config_dir, args.force, &mut created, &mut existing)
+        .map_err(|err| err.with_json(cli.json))?;
+    ensure_dir(&cache_dir, args.force, &mut created, &mut existing)
+        .map_err(|err| err.with_json(cli.json))?;
 
     if config_path.exists() {
         existing.push(path_string(&config_path));
@@ -283,17 +285,45 @@ fn load_profiles_for_cleanup(cli: &Cli) -> crate::error::Result<Vec<config::Prof
 
 fn ensure_dir(
     path: &Path,
+    force: bool,
     created: &mut Vec<String>,
     existing: &mut Vec<String>,
 ) -> crate::error::Result<()> {
     if path.exists() {
+        if force {
+            set_private_dir_permissions(path).map_err(|err| {
+                CampusError::config(format!(
+                    "failed to verify permissions for {}: {err}",
+                    path.display()
+                ))
+            })?;
+        }
         existing.push(path_string(path));
         return Ok(());
     }
     fs::create_dir_all(path).map_err(|err| {
         CampusError::config(format!("failed to create {}: {err}", path.display()))
     })?;
+    set_private_dir_permissions(path).map_err(|err| {
+        CampusError::config(format!(
+            "failed to set private permissions on {}: {err}",
+            path.display()
+        ))
+    })?;
     created.push(path_string(path));
+    Ok(())
+}
+
+fn set_private_dir_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
     Ok(())
 }
 

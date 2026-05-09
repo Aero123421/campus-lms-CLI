@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, redirect::Policy};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use url::Url;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     cli::Cli,
@@ -18,7 +18,7 @@ use crate::{
 
 pub struct MoodleClient {
     pub base_url: Url,
-    token: String,
+    token: Zeroizing<String>,
     http: Client,
 }
 
@@ -37,11 +37,12 @@ pub fn client_from_profile_data(
     let token = keychain::get_token(profile).map_err(|err| err.with_json(cli.json))?;
     Ok(MoodleClient {
         base_url: profile.base_url.clone(),
-        token,
+        token: Zeroizing::new(token),
         http: Client::builder()
             .user_agent(format!("campus-lms-cli/{}", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
+            .redirect(Policy::none())
             .build()
             .map_err(|err| CampusError::Network {
                 message: err.to_string(),
@@ -63,7 +64,7 @@ impl MoodleClient {
                 CampusError::invalid_argument(format!("invalid REST endpoint: {err}"), None)
             })?;
         let mut form = vec![
-            ("wstoken".to_string(), self.token.clone()),
+            ("wstoken".to_string(), self.token.as_str().to_string()),
             ("wsfunction".to_string(), function.to_string()),
             ("moodlewsrestformat".to_string(), "json".to_string()),
         ];

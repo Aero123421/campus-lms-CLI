@@ -1,6 +1,6 @@
 {
   "name": "campus-lms-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A read-only CLI integration for Moodle-compatible university LMS sites.",
   "license": "Apache-2.0",
   "repository": {
@@ -11,7 +11,7 @@
     "campus-lms": "npm/campus-lms.js"
   },
   "scripts": {
-    "build:native": "node npm/cargo.js build --release",
+    "build:native": "node npm/cargo.js build --release --locked",
     "prepare:prebuilt": "node npm/prepare-prebuilt.js",
     "prepare": "node -e \"\"",
     "postinstall": "node npm/postinstall.js",

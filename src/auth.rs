@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use reqwest::blocking::Client;
+use reqwest::{blocking::Client, redirect::Policy};
 use serde::Deserialize;
 use url::Url;
 use zeroize::Zeroizing;
@@ -76,6 +76,7 @@ pub fn login(cli: &Cli, args: &LoginArgs) -> crate::error::Result<()> {
         username,
         service: args.service.clone(),
         cache_ttl_seconds: config::default_cache_ttl_seconds(),
+        cache_retention_seconds: config::default_cache_retention_seconds(),
     };
     keychain::set_token(&profile, &token).map_err(|err| err.with_json(cli.json))?;
     keychain::verify_token_roundtrip(&profile, &token).map_err(|err| err.with_json(cli.json))?;
@@ -98,7 +99,8 @@ pub fn login(cli: &Cli, args: &LoginArgs) -> crate::error::Result<()> {
             base_url: profile.base_url.to_string(),
             username: profile.username.clone(),
             credential_target: keychain::credential_target(&profile),
-            token_verified: true,
+            token_storage_verified: true,
+            token_live_verified: Some(true),
             warnings: Vec::new(),
             next_steps: vec![
                 "Run: campus-lms auth status --live --json".to_string(),
@@ -136,6 +138,7 @@ pub fn import_token(cli: &Cli, args: &ImportTokenArgs) -> crate::error::Result<(
         username: args.username.clone(),
         service: args.service.clone(),
         cache_ttl_seconds: config::default_cache_ttl_seconds(),
+        cache_retention_seconds: config::default_cache_retention_seconds(),
     };
     keychain::set_token(&profile, token.as_str()).map_err(|err| err.with_json(cli.json))?;
     keychain::verify_token_roundtrip(&profile, token.as_str())
@@ -150,17 +153,36 @@ pub fn import_token(cli: &Cli, args: &ImportTokenArgs) -> crate::error::Result<(
     config.profile.insert(profile_name.clone(), profile.clone());
     config::save(cli, &config).map_err(|err| err.with_json(cli.json))?;
 
+    let mut token_live_verified = None;
+    let mut warnings = Vec::new();
+    if args.live {
+        match client_from_profile_data(cli, &profile_name, &profile)
+            .and_then(|client| client.site_info())
+        {
+            Ok(_) => token_live_verified = Some(true),
+            Err(err) => {
+                token_live_verified = Some(false);
+                warnings.push(Warning::new(
+                    err.code(),
+                    err.to_string(),
+                    err.hint().map(str::to_string),
+                ));
+            }
+        }
+    }
+
     if cli.json {
         output::print_json(&AuthImportTokenOutput {
             schema_version: "campus-lms.auth_import_token.v1",
             generated_at: output::generated_at(),
-            authenticated: true,
+            authenticated: token_live_verified.unwrap_or(true),
             profile: profile_name,
             base_url: profile.base_url.to_string(),
             username: profile.username.clone(),
             credential_target: keychain::credential_target(&profile),
-            token_verified: true,
-            warnings: Vec::new(),
+            token_storage_verified: true,
+            token_live_verified,
+            warnings,
             next_steps: vec![
                 "Run: campus-lms auth status --live --json".to_string(),
                 "Run: campus-lms doctor --json".to_string(),
@@ -603,6 +625,7 @@ fn request_token(
         .user_agent(format!("campus-lms-cli/{}", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
+        .redirect(Policy::none())
         .build()
         .map_err(|err| CampusError::Network {
             message: err.to_string(),

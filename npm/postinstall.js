@@ -23,6 +23,10 @@ const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 
 if (prebuiltBinary && fs.existsSync(prebuiltBinary)) {
+  const checksumFile = `${prebuiltBinary}.sha256`;
+  if (fs.existsSync(checksumFile)) {
+    verifyChecksum(prebuiltBinary, checksumFile, path.basename(prebuiltBinary));
+  }
   fs.mkdirSync(path.dirname(installedBinary), { recursive: true });
   fs.copyFileSync(prebuiltBinary, installedBinary);
   markExecutable(installedBinary);
@@ -131,7 +135,7 @@ function buildFromSource() {
     process.exit(1);
   }
 
-  const result = spawnSync(cargo, ["build", "--release"], {
+  const result = spawnSync(cargo, ["build", "--release", "--locked"], {
     cwd: root,
     stdio: "inherit",
     windowsHide: false

@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { executableName, packagePlatform } = require("./platform");
 
 const root = path.resolve(__dirname, "..");
@@ -26,5 +27,12 @@ fs.copyFileSync(source, target);
 if (process.platform !== "win32") {
   fs.chmodSync(target, 0o755);
 }
+fs.writeFileSync(`${target}.sha256`, `${sha256(target)}  ${path.basename(target)}\n`);
 
 console.log(`Prepared prebuilt binary: ${target}`);
+
+function sha256(file) {
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(file));
+  return hash.digest("hex");
+}

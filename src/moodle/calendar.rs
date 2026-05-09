@@ -8,7 +8,10 @@ use time::{Date, Duration as TimeDuration, OffsetDateTime, UtcOffset};
 
 use crate::{
     cache,
-    cli::{ensure_cache_flags, ensure_days, ensure_max_items, warning_detail_limit, Cli, TodoArgs},
+    cli::{
+        ensure_cache_flags, ensure_days, ensure_max_items, ensure_status_check_limit,
+        normalize_course_filter, warning_detail_limit, Cli, TodoArgs,
+    },
     config,
     dto::{
         warning_report_with_options, CacheMeta, DateRange, TodoItem, TodoOutput, TodoSummary,
@@ -17,7 +20,7 @@ use crate::{
     error::CampusError,
     moodle::{
         api::MoodleApi,
-        assignments::{fetch_assignments, ts, AssignmentIndexPayload},
+        assignments::{fetch_assignments_for_courses, ts, AssignmentIndexPayload},
         client::client_from_profile_data,
         models::{ActionEvent, ActionEventsResponse},
     },
@@ -51,6 +54,7 @@ pub fn todo(cli: &Cli, args: &TodoArgs) -> crate::error::Result<()> {
     ensure_cache_flags(args.refresh, args.offline).map_err(|err| err.with_json(cli.json))?;
     ensure_days(args.days).map_err(|err| err.with_json(cli.json))?;
     ensure_max_items(args.max_items).map_err(|err| err.with_json(cli.json))?;
+    ensure_status_check_limit(args.status_check_limit).map_err(|err| err.with_json(cli.json))?;
     let fetched = fetch(cli, args).map_err(|err| err.with_json(cli.json))?;
     let detail_limit = warning_detail_limit(cli).map_err(|err| err.with_json(cli.json))?;
     let visible_item_ids = fetched.payload.visible_item_ids();
@@ -98,15 +102,33 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     ensure_cache_flags(args.refresh, args.offline)?;
     ensure_days(args.days)?;
     ensure_max_items(args.max_items)?;
+    ensure_status_check_limit(args.status_check_limit)?;
     let config = config::load(cli)?;
     let profile_name = config::selected_profile_name(cli, &config);
     let profile = config::active_profile(cli, &config)?;
+    cache::prune_older_than(Duration::from_secs(profile.cache_retention_seconds))?;
+    let course_filter = args
+        .course
+        .as_deref()
+        .map(normalize_course_filter)
+        .transpose()?;
+    let normalized_course = course_filter.as_ref().map(|(course, _)| course.as_str());
+    let course_ids = course_filter
+        .as_ref()
+        .map(|(_, id)| vec![*id])
+        .unwrap_or_default();
     let namespace = cache::profile_namespace(&profile_name, profile, None);
     let cache_key = cache::key(
         "todo",
         &format!(
-            "v5:{}:{}:{:?}:{}:{:?}",
-            namespace, args.days, args.course, args.include_submitted, args.max_items
+            "v6:{}:{}:{:?}:{}:{:?}:{}:{}",
+            namespace,
+            args.days,
+            normalized_course,
+            args.include_submitted,
+            args.max_items,
+            args.status_check_limit,
+            args.no_submission_status_check
         ),
     );
     let ttl_seconds = profile.cache_ttl_seconds;
@@ -128,26 +150,22 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
     let mut items = Vec::new();
     let mut warnings = Vec::new();
     let command_prefix = command_prefix(cli);
-    let assignments = fetch_assignments(cli, args.refresh, args.offline)?;
+    let assignments = fetch_assignments_for_courses(cli, args.refresh, args.offline, &course_ids)?;
     let visible_warning_item_ids = assignments
         .items
         .iter()
-        .filter(|item| {
-            args.course
-                .as_deref()
-                .is_none_or(|course| item.course_id == course)
-        })
+        .filter(|item| normalized_course.is_none_or(|course| item.course_id == course))
         .flat_map(|item| [Some(item.assignment.id), item.assignment.cmid])
         .flatten()
         .collect::<Vec<_>>();
     warnings.extend(filter_warnings_for_course(
         assignments.warnings.clone(),
-        args.course.as_deref(),
+        normalized_course,
     ));
 
     match fetch_action_events(&client, now.unix_timestamp(), to.unix_timestamp()) {
         Ok((events, event_warnings)) => {
-            warnings.extend(filter_warnings_for_course(event_warnings, args.course.as_deref()));
+            warnings.extend(filter_warnings_for_course(event_warnings, normalized_course));
             items.extend(events.into_iter().filter_map(|event| {
                 let due = valid_due(event.timesort.or(event.timestart));
                 let course_id = event
@@ -155,8 +173,8 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
                     .as_ref()
                     .and_then(|course| course.id)
                     .map(|id| format!("course:{id}"));
-                if let Some(filter) = &args.course {
-                    if course_id.as_deref() != Some(filter.as_str()) {
+                if let Some(filter) = normalized_course {
+                    if course_id.as_deref() != Some(filter) {
                         return None;
                     }
                 }
@@ -217,13 +235,15 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
         .map(|id| format!("assign:{id}"))
         .collect::<std::collections::BTreeSet<_>>();
 
+    let mut status_checks = 0usize;
+    let mut status_limit_warning_emitted = false;
     for item in assignments.items {
         let assignment_id = format!("assign:{}", item.assignment.id);
         if existing_assignment_ids.contains(&assignment_id) {
             continue;
         }
-        if let Some(filter) = &args.course {
-            if &item.course_id != filter {
+        if let Some(filter) = normalized_course {
+            if item.course_id != filter {
                 continue;
             }
         }
@@ -242,8 +262,29 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
         let mut status = "unknown".to_string();
         let mut status_reason = "submission status was not checked.".to_string();
         let mut status_source = "assignment_fallback".to_string();
-        if !args.include_submitted {
-            match assignment_submission_status(&client, item.assignment.id) {
+        if args.no_submission_status_check {
+            status_reason =
+                "--no-submission-status-check was used, so submitted status was not checked."
+                    .to_string();
+        } else if !args.include_submitted {
+            if status_checks >= args.status_check_limit {
+                if !status_limit_warning_emitted {
+                    warnings.push(Warning::new(
+                        "SUBMISSION_STATUS_CHECK_LIMIT_REACHED",
+                        format!(
+                            "Skipped fallback submission-status checks after {} assignment(s).",
+                            args.status_check_limit
+                        ),
+                        Some("Increase --status-check-limit, use --include-submitted, or rely on calendar action status to reduce LMS load.".to_string()),
+                    ));
+                    status_limit_warning_emitted = true;
+                }
+                status_reason =
+                    "submission status was not checked because --status-check-limit was reached."
+                        .to_string();
+            } else {
+                status_checks += 1;
+                match assignment_submission_status(&client, item.assignment.id) {
                 Ok(Some(submission_status)) => {
                     status_source = "submission_status".to_string();
                     status_reason = format!(
@@ -267,6 +308,7 @@ pub fn fetch(cli: &Cli, args: &TodoArgs) -> crate::error::Result<FetchedTodo> {
                             .to_string(),
                     ),
                 )),
+            }
             }
         } else {
             status_reason =

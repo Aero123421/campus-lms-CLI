@@ -46,6 +46,8 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
         offline: args.offline,
         include_submitted: false,
         course: None,
+        status_check_limit: 20,
+        no_submission_status_check: false,
     };
     let fetched = calendar::fetch(cli, &todo_args).map_err(|err| err.with_json(cli.json))?;
     let payload = fetched.payload;
@@ -107,7 +109,6 @@ fn snapshot(cli: &Cli, args: &crate::cli::AiSnapshotArgs) -> crate::error::Resul
             returned_count: payload.items.len(),
             total_matching_count,
             limited: payload.items.len() < total_matching_count,
-            pending_count,
             pending_count_scope: "returned_items".to_string(),
             pending_returned_count: pending_count,
             pending_total_matching_count: total_matching_count,

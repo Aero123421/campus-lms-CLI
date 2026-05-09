@@ -35,7 +35,12 @@ pub struct Cli {
     )]
     pub json: bool,
 
-    #[arg(long, global = true, help = "Disable colored output")]
+    #[arg(
+        long,
+        global = true,
+        hide = true,
+        help = "Reserved compatibility flag; current output does not use colors"
+    )]
     pub no_color: bool,
 
     #[arg(
@@ -114,7 +119,7 @@ pub enum AuthCommand {
         name = "import-token",
         about = "Store an existing Moodle Web Services token",
         long_about = "Stores an administrator-issued or manually generated Moodle Web Services token in the OS credential store.\n\nUse this when password login is blocked by SSO/MFA but Moodle Web Services tokens are allowed by the university.",
-        after_help = "Examples:\n  $env:MOODLE_TOKEN = \"...\"; campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-env MOODLE_TOKEN --json\n  Get-Content .\\token.txt | campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-stdin --json"
+        after_help = "Examples:\n  $env:MOODLE_TOKEN = \"...\"; campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-env MOODLE_TOKEN --json\n  Get-Content .\\token.txt | campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-stdin --json\n  campus-lms auth import-token --base-url https://lms.example.edu/moodle/ --username student123 --token-stdin --live --json"
     )]
     ImportToken(ImportTokenArgs),
     #[command(about = "Delete the stored token for the selected profile")]
@@ -204,6 +209,9 @@ pub struct ImportTokenArgs {
         help = "Read the Moodle token from an environment variable"
     )]
     pub token_env: Option<String>,
+
+    #[arg(long, help = "Also call Moodle to verify the imported token works")]
+    pub live: bool,
 }
 
 #[derive(Debug, Args)]
@@ -264,9 +272,23 @@ pub struct TodoArgs {
     #[arg(
         long,
         value_name = "course:ID",
-        help = "Return tasks only for one course"
+        help = "Return tasks only for one course; accepts course:123 or 123"
     )]
     pub course: Option<String>,
+
+    #[arg(
+        long,
+        default_value_t = 20,
+        value_name = "N",
+        help = "Maximum fallback assignment submission-status checks, 0 to 500"
+    )]
+    pub status_check_limit: usize,
+
+    #[arg(
+        long,
+        help = "Do not call per-assignment submission-status APIs for fallback tasks"
+    )]
+    pub no_submission_status_check: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -299,6 +321,9 @@ pub struct AssignmentShowArgs {
 
     #[arg(long, help = "Use cached data only and do not contact Moodle")]
     pub offline: bool,
+
+    #[arg(long, help = "Do not read or write the assignment detail cache")]
+    pub no_cache: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -444,6 +469,34 @@ pub fn ensure_max_items(max_items: Option<usize>) -> crate::error::Result<()> {
         )),
         _ => Ok(()),
     }
+}
+
+pub fn ensure_status_check_limit(limit: usize) -> crate::error::Result<()> {
+    if limit <= 500 {
+        Ok(())
+    } else {
+        Err(crate::error::CampusError::invalid_argument(
+            "--status-check-limit must be 500 or less.",
+            None,
+        ))
+    }
+}
+
+pub fn normalize_course_filter(input: &str) -> crate::error::Result<(String, i64)> {
+    let raw = input.strip_prefix("course:").unwrap_or(input);
+    let id = raw.parse::<i64>().map_err(|_| {
+        crate::error::CampusError::invalid_argument(
+            "--course must look like course:123 or 123.",
+            Some("Example: campus-lms todo --course course:123 --json"),
+        )
+    })?;
+    if id <= 0 {
+        return Err(crate::error::CampusError::invalid_argument(
+            "--course id must be a positive integer.",
+            Some("Example: campus-lms todo --course course:123 --json"),
+        ));
+    }
+    Ok((format!("course:{id}"), id))
 }
 
 pub fn ensure_max_chars(max_chars: usize) -> crate::error::Result<()> {

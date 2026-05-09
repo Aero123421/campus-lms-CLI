@@ -19,7 +19,7 @@ pub fn print() -> crate::error::Result<()> {
                 "read_only": false,
                 "safe_for_ai": false,
                 "description": "Store an administrator-issued Moodle Web Services token for SSO/MFA environments.",
-                "example": "campus-lms auth import-token --base-url https://lms.example.edu/ --username student123 --token-stdin --json"
+                "example": "campus-lms auth import-token --base-url https://lms.example.edu/ --username student123 --token-stdin --live --json"
             },
             {
                 "name": "auth status",
@@ -39,15 +39,15 @@ pub fn print() -> crate::error::Result<()> {
                 "name": "ai snapshot",
                 "read_only": true,
                 "safe_for_ai": true,
-                "description": "Return a compact overview of upcoming Moodle tasks.",
+                "description": "Return a compact overview of upcoming Moodle tasks. Fallback submission-status checks are capped to reduce LMS load.",
                 "example": "campus-lms ai snapshot --days 14 --json"
             },
             {
                 "name": "assignment show",
                 "read_only": true,
                 "safe_for_ai": true,
-                "description": "Show assignment details without submitting or changing completion state.",
-                "example": "campus-lms assignment show assign:12345 --json"
+                "description": "Show assignment details without submitting or changing completion state. Use --no-cache for sensitive one-off detail reads.",
+                "example": "campus-lms assignment show assign:12345 --no-cache --json"
             },
             {
                 "name": "courses",
@@ -60,8 +60,8 @@ pub fn print() -> crate::error::Result<()> {
                 "name": "todo",
                 "read_only": true,
                 "safe_for_ai": true,
-                "description": "List upcoming LMS tasks.",
-                "example": "campus-lms todo --days 14 --json"
+                "description": "List upcoming LMS tasks. Use --status-check-limit or --no-submission-status-check to control fallback API load.",
+                "example": "campus-lms todo --days 14 --status-check-limit 20 --json"
             },
             {
                 "name": "doctor",

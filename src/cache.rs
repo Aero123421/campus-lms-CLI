@@ -95,6 +95,45 @@ pub fn get_entry<T: DeserializeOwned>(
     }))
 }
 
+pub fn get_entry_optional<T: DeserializeOwned>(
+    cache_key: &str,
+    ttl: Duration,
+    refresh: bool,
+    allow_stale: bool,
+) -> crate::error::Result<Option<CacheEntry<T>>> {
+    if refresh {
+        return Ok(None);
+    }
+    let path = cache_dir()?.join(cache_key);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(&path)
+        .map_err(|err| CampusError::cache(format!("failed to stat {}: {err}", path.display())))?;
+    let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(Duration::from_secs(u64::MAX));
+    if age > ttl && !allow_stale {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|err| CampusError::cache(format!("failed to read {}: {err}", path.display())))?;
+    let value = serde_json::from_str(&text)
+        .map_err(|err| CampusError::cache(format!("failed to parse {}: {err}", path.display())))?;
+    let fetched_at = modified
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| OffsetDateTime::from_unix_timestamp(duration.as_secs() as i64).ok())
+        .and_then(|dt| dt.format(&Rfc3339).ok());
+    Ok(Some(CacheEntry {
+        value,
+        fetched_at,
+        age,
+        stale: age > ttl,
+    }))
+}
+
 pub fn set<T: Serialize>(cache_key: &str, value: &T) -> crate::error::Result<()> {
     let dir = cache_dir()?;
     fs::create_dir_all(&dir)
@@ -104,6 +143,48 @@ pub fn set<T: Serialize>(cache_key: &str, value: &T) -> crate::error::Result<()>
         .map_err(|err| CampusError::cache(format!("failed to serialize cache: {err}")))?;
     write_private(&path, &text)
         .map_err(|err| CampusError::cache(format!("failed to write {}: {err}", path.display())))
+}
+
+pub fn prune_older_than(retention: Duration) -> crate::error::Result<usize> {
+    let dir = cache_dir()?;
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0;
+    let entries = fs::read_dir(&dir)
+        .map_err(|err| CampusError::cache(format!("failed to read {}: {err}", dir.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            CampusError::cache(format!("failed to inspect {}: {err}", dir.display()))
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or(Duration::from_secs(0));
+        if age <= retention {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(CampusError::cache(format!(
+                    "failed to remove expired cache {}: {err}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(removed)
 }
 
 pub fn namespace(parts: &[&str]) -> String {

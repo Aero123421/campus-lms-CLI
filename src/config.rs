@@ -33,6 +33,8 @@ pub struct Profile {
     pub service: String,
     #[serde(default = "default_cache_ttl_seconds")]
     pub cache_ttl_seconds: u64,
+    #[serde(default = "default_cache_retention_seconds")]
+    pub cache_retention_seconds: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -41,14 +43,10 @@ pub struct Privacy {
     pub include_grades_in_ai_snapshot: bool,
     #[serde(default)]
     pub include_feedback_in_ai_snapshot: bool,
-    #[serde(default)]
-    pub include_user_email: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Output {
-    #[serde(default = "default_output_format")]
-    pub default_format: String,
     #[serde(default = "default_timezone")]
     pub timezone: String,
 }
@@ -67,7 +65,6 @@ impl Default for Config {
 impl Default for Output {
     fn default() -> Self {
         Self {
-            default_format: default_output_format(),
             timezone: default_timezone(),
         }
     }
@@ -85,8 +82,8 @@ pub fn default_cache_ttl_seconds() -> u64 {
     300
 }
 
-fn default_output_format() -> String {
-    "text".to_string()
+pub fn default_cache_retention_seconds() -> u64 {
+    30 * 24 * 60 * 60
 }
 
 fn default_timezone() -> String {
@@ -121,8 +118,10 @@ pub fn load(cli: &Cli) -> crate::error::Result<Config> {
     }
     let text = fs::read_to_string(&path)
         .map_err(|err| CampusError::config(format!("failed to read {}: {err}", path.display())))?;
-    toml::from_str(&text)
-        .map_err(|err| CampusError::config(format!("failed to parse {}: {err}", path.display())))
+    let config: Config = toml::from_str(&text)
+        .map_err(|err| CampusError::config(format!("failed to parse {}: {err}", path.display())))?;
+    validate(&config)?;
+    Ok(config)
 }
 
 pub fn save(cli: &Cli, config: &Config) -> crate::error::Result<()> {
@@ -158,6 +157,20 @@ pub fn selected_profile_name(cli: &Cli, config: &Config) -> String {
     cli.profile
         .clone()
         .unwrap_or_else(|| config.active_profile.clone())
+}
+
+pub fn validate(config: &Config) -> crate::error::Result<()> {
+    validate_timezone(&config.output.timezone)?;
+    Ok(())
+}
+
+pub fn validate_timezone(timezone: &str) -> crate::error::Result<()> {
+    match timezone {
+        "UTC" | "Asia/Tokyo" => Ok(()),
+        other => Err(CampusError::config(format!(
+            "unsupported output.timezone '{other}'; supported values are UTC and Asia/Tokyo"
+        ))),
+    }
 }
 
 fn create_private_dir(path: &Path) -> std::io::Result<()> {

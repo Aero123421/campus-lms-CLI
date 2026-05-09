@@ -265,7 +265,8 @@ pub struct AuthLoginOutput {
     pub base_url: String,
     pub username: String,
     pub credential_target: crate::keychain::CredentialTarget,
-    pub token_verified: bool,
+    pub token_storage_verified: bool,
+    pub token_live_verified: Option<bool>,
     pub warnings: Vec<Warning>,
     pub next_steps: Vec<String>,
 }
@@ -279,7 +280,8 @@ pub struct AuthImportTokenOutput {
     pub base_url: String,
     pub username: String,
     pub credential_target: crate::keychain::CredentialTarget,
-    pub token_verified: bool,
+    pub token_storage_verified: bool,
+    pub token_live_verified: Option<bool>,
     pub warnings: Vec<Warning>,
     pub next_steps: Vec<String>,
 }
@@ -418,6 +420,8 @@ pub struct AttachmentOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AssignmentSubmissionOutput {
     pub status: String,
+    #[schemars(regex(pattern = "^(live|cache|unavailable)$"))]
+    pub status_source: String,
     pub last_modified_at: Option<String>,
     pub grading_status: Option<String>,
 }
@@ -449,6 +453,7 @@ pub struct AssignmentDetailOutput {
 pub struct AssignmentOutput {
     pub schema_version: &'static str,
     pub generated_at: String,
+    pub cache: CacheMeta,
     pub assignment: AssignmentDetailOutput,
     pub warnings_summary: Vec<WarningSummary>,
     pub warnings_total_count: usize,
@@ -469,7 +474,6 @@ pub struct SummaryOutput {
     pub returned_count: usize,
     pub total_matching_count: usize,
     pub limited: bool,
-    pub pending_count: usize,
     pub pending_count_scope: String,
     pub pending_returned_count: usize,
     pub pending_total_matching_count: usize,
@@ -558,7 +562,6 @@ mod tests {
                 returned_count: 1,
                 total_matching_count: 1,
                 limited: false,
-                pending_count: 1,
                 pending_count_scope: "returned_items".to_string(),
                 pending_returned_count: 1,
                 pending_total_matching_count: 1,
@@ -615,7 +618,6 @@ mod tests {
                     "returned_count": 1,
                     "total_matching_count": 1,
                     "limited": false,
-                    "pending_count": 1,
                     "pending_count_scope": "returned_items",
                     "pending_returned_count": 1,
                     "pending_total_matching_count": 1,
